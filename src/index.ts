@@ -1677,9 +1677,14 @@ export function apply(ctx: Context, config: GenerateConfig): void {
     readonly completion?: { readonly draft: string; readonly text: string; readonly final?: boolean } | null;
     readonly completionSessionId?: string | null;
     readonly error?: string;
-    /** 续写在途（见 `ClientPush.completionPending`）。 */
+    /** 续写在途（见 `ClientPush.completionPending`）。**进指纹**。 */
     readonly completionPending?: boolean;
-    /** 指示样式开关的实时值（见 `ClientPush.caretGlow`）。 */
+    /**
+     * 指示样式开关的实时值（见 `ClientPush.caretGlow`）。
+     *
+     * **不进指纹**：它们是播报出去的配置值，不是内容变更信号。进指纹会让任何一次
+     * 推送都可能把建议格判脏（见 `pushSigOf` 里那段说明）。
+     */
     readonly caretGlow?: boolean;
     readonly boxGlow?: boolean;
   };
@@ -1699,12 +1704,17 @@ export function apply(ctx: Context, config: GenerateConfig): void {
       : o.completion === undefined
         ? '∄' // 未携带（保留 client 现值）
         : `${o.completionSessionId ?? ''}#${o.completion.draft}=${o.completion.text}`;
-    // 在途位与两个样式位都进指纹：前者不进的话「开始生成」那一次写入会和上一次
-    // 逐字节相同而被载荷去重掉（指示永远不亮）；后者不进的话改了开关要等下一次
-    // 无关变化才生效。
+    // 在途位**必须**进指纹：不进的话「开始生成」那一次写入会与上一次逐字节相同而被
+    // 载荷去重掉，指示永远不亮。
+    //
+    // ⚠️ 两个样式位（caretGlow / boxGlow）**刻意不进**。它们是随载荷播报的配置值，
+    // 不是「内容变了要重写」的信号；一旦进指纹，任何一次推送（哪怕只是热度变了）
+    // 都会因为「此刻开关值与上次指纹里那份不同」而把**建议格**判成脏 ⇒ 一次纯热度
+    // 变化也重写建议格，把 #36 拆两格的收益原样还回去。实测形态正是
+    // `cells=both`（payload-split-smoke 的 ②/⑤ 两组就是这么红的）。
+    // 代价是：改开关要等下一次真正的建议/热度变化才播报出去——与 `error` 键同性质。
     const pendingKey = o.completionPending === true ? 'P' : '∅';
-    const styleKey = `${o.caretGlow === true ? 'c' : '-'}${o.boxGlow === true ? 'b' : '-'}`;
-    return `${sug}<CPL>${completionKey}<ERR>${o.error ?? ''}<PND>${pendingKey}<STY>${styleKey}`;
+    return `${sug}<CPL>${completionKey}<ERR>${o.error ?? ''}<PND>${pendingKey}`;
   };
 
   const hotSigOf = (o: HotSig): string => {
