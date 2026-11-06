@@ -97,6 +97,14 @@ import {
 } from './stream-ghost.js';
 import { OpsWriteQueue, type OpsWriteKind } from './ops-write-queue.js';
 import { SuggestGhostCard, type OfficialModelGroup } from './settings-card.js';
+// 生成中指示（C1 光标呼吸 / V4 输入框呼吸光）。判据与两条 CSS 声明都是纯函数，
+// 放在独立模块里以便 node 离线断言（4 种开关组合 × 在途/不在途）。
+import {
+  BOX_GLOW_RULE,
+  CARET_GLOW_RULE,
+  DEFAULT_PENDING_STYLE,
+} from './pending-indicator.js';
+import type { PendingStyleSettings } from './pending-indicator.js';
 
 /** 宿主 `session.modelCatalog()` 的原始行（只声明要读的字段）。 */
 interface RawModelCatalogModel {
@@ -402,6 +410,15 @@ type PushedPayload = {
    * 「不在途」。旧宿主不给这个键 ⇒ 永远读成不在途（滚动升级期间无害）。
    */
   regenPending?: unknown;
+  /**
+   * 续写**在途**（生成中指示）。与 `regenPending` 同一套缺省语义：宿主只在 true 时写
+   * ⇒ 读到缺省就是"不在途"；旧宿主不给这个键 ⇒ 永远读成不在途（滚动升级期间只是没有
+   * 指示，不会误亮）。
+   */
+  completionPending?: unknown;
+  /** 指示样式开关（实时值，恒写；宿主不给时按缺省：V4 开、C1 关）。 */
+  caretGlow?: unknown;
+  boxGlow?: unknown;
 };
 
 /**
@@ -422,6 +439,14 @@ type HotPushedPayload = {
 const PROJECTION_KEY = 'suggestGhost';
 /** 幽灵文本的 DOM 标记，用于定位/清理。 */
 const OVERLAY_ID = 'dsh-suggest-ghost-overlay';
+/**
+ * 生成中指示的 CSS 标记（与幽灵的样式标签分开）。
+ *
+ * 单独一个 `<style>` 的理由：这两条规则的**内容随设置变化**（开/关各自一条），
+ * 与 overlay 构造时注入一次、内容恒定的占位让位规则生命周期不同。分开之后
+ * 「改设置 ⇒ 换内容」只在 `syncPendingStyle` 里发生，不需要重建 overlay。
+ */
+const PENDING_STYLE_ID = 'dsh-suggest-ghost-pending-css';
 /** 默认采纳快捷键（与 host 默认一致）。 */
 const DEFAULT_ACCEPT_KEY = 'Tab';
 /** settings 命名空间（与 host 端一致）。 */
@@ -614,6 +639,13 @@ class GhostOverlay {
   private readonly onScroll: () => void;
   private readonly onResize: () => void;
   private readonly styleTag: HTMLStyleElement;
+  /**
+   * 生成中指示的样式标签（内容随设置变化）。
+   *
+   * 惰性创建：两个开关都关且从未开过时，这个节点根本不存在 ⇒ 零额外 DOM、零额外
+   * 样式表。`syncPendingStyle()` 第一次真的需要时才插。
+   */
+  private pendingStyle: HTMLStyleElement | null = null;
   /** 尺寸变化观察者：composer 自动增高/附件行出现/字体回流都会改变内容起点。 */
   private resizeObserver: ResizeObserver | null = null;
   /** 正在显示的内容（供 ResizeObserver 回调重对齐后重新自检）。 */
@@ -1156,9 +1188,57 @@ class GhostOverlay {
     delete this.el.dataset.reject;
   }
 
+  /**
+   * 按「设置 + 在途位」同步生成中指示。
+   *
+   * 三条设计约束：
+   *  1. **状态打在插件自己的节点上**（`data-caret-glow` / `data-box-glow`），宿主侧
+   *     一律经 `body:has()` 命中。这是既有 `data-shown` 让位 placeholder 的同款做法：
+   *     React/Lexical 重渲染会剥掉编辑器上的外来类与内联样式，而 overlay 是我们的
+   *     私有节点，不受影响。
+   *  2. **只增删属性，不重绘**：两个属性各自独立，改一个不碰另一个（用户要求两个
+   *     选项互不影响）。样式表内容变化只在**真的变了**时重建，避免每帧重插。
+   *  3. **彻底关闭时移除整个标签**：两个开关都关就让它从 DOM 里消失，不留下一条
+   *     永不命中的空规则（那不是"省字节"，是让排查时看到的 DOM 与真实状态一致）。
+   *
+   * @param style - 两个开关的当前值。
+   * @param pending - 当前会话是否有续写在途。
+   */
+  syncPendingStyle(style: PendingStyleSettings, pending: boolean): void {
+    if (typeof document === 'undefined') return;
+    // 两个开关**各自独立**判定，任何一条都不看另一条。
+    const caret = style.caretGlow === true;
+    const box = style.boxGlow === true;
+    // 不在途时两个属性一起摘掉：它们表达的是"此刻正在生成"，与开关无关。
+    const live = pending === true;
+    if (caret && live) this.el.dataset.caretGlow = '1'; else delete this.el.dataset.caretGlow;
+    if (box && live) this.el.dataset.boxGlow = '1'; else delete this.el.dataset.boxGlow;
+
+    const css = [
+      caret ? CARET_GLOW_RULE : '',
+      box ? BOX_GLOW_RULE : '',
+    ].filter(part => part !== '').join('\n');
+    if (css === '') {
+      this.pendingStyle?.remove();
+      this.pendingStyle = null;
+      return;
+    }
+    if (this.pendingStyle === null) {
+      const tag = document.createElement('style');
+      tag.dataset.pluginCss = PENDING_STYLE_ID;
+      this.pendingStyle = tag;
+      document.head.appendChild(tag);
+    }
+    if (this.pendingStyle.textContent !== css) this.pendingStyle.textContent = css;
+  }
+
   dispose(): void {
     this.detach();
     this.styleTag.remove();
+    // 指示的样式标签与两个属性一起收掉：插件卸载后不该在宿主 DOM 上留任何痕迹
+    // （属性挂在 overlay 自身，`this.el` 会随组件一起消失；样式标签在 head 里，必须显式删）。
+    this.pendingStyle?.remove();
+    this.pendingStyle = null;
   }
 }
 
@@ -1368,6 +1448,12 @@ function applyBody(ctx: Context): void {
     regenKey: string;
     /** #127：宿主在途读到的「换一条」状态（只在 true 时被宿主写进载荷）。 */
     regenPending: boolean;
+    /** 续写在途（生成中指示的判据；只在 true 时被宿主写进载荷）。 */
+    completionPending: boolean;
+    /** 生成中的光标呼吸（C1）。 */
+    caretGlowEnabled: boolean;
+    /** 生成中的输入框呼吸光（V4）。 */
+    boxGlowEnabled: boolean;
     /** host 实时推送：最新 LLM 建议（rev 递增识别新值）。 */
     suggestion: {
       turn: number;
@@ -1409,6 +1495,11 @@ function applyBody(ctx: Context): void {
     regenEnabled: true,
     regenKey: 'Alt+G',
     regenPending: false,
+    completionPending: false,
+    // 缺省与宿主 schema 逐字同值（C1 关 / V4 开）：旧宿主、载荷缺失、冷启动
+    // 三种情况下客户端都按这套走，与宿主侧行为一致。
+    caretGlowEnabled: false,
+    boxGlowEnabled: true,
     suggestion: cached.suggestion ?? null,
     // 缓存里的建议可能来自上一进程；帧提示一起持久化，避免把 provisional 帧的
     // 建议冷启动后当成终帧采纳（读不到时按旧载荷兜底）。
@@ -1730,10 +1821,28 @@ function applyBody(ctx: Context): void {
   /** 上次通过 isComposerElement 验证的输入框（composer 未变时跳过重复 DOM 属性检查）。 */
   let validatedComposer: HTMLElement | null = null;
 
+  /**
+   * 从 settings 提炼两个指示开关（缺省值来自纯模块，与宿主 schema 逐字同值）。
+   *
+   * 单独一个小函数而不是内联三目：两个开关的缺省**刻意不同**（C1 关、V4 开），
+   * 散在调用处很容易被"顺手统一"成一个默认值。
+   */
+  const pendingStyleOf = (s: typeof settings): PendingStyleSettings => ({
+    caretGlow: typeof s.caretGlowEnabled === 'boolean' ? s.caretGlowEnabled : DEFAULT_PENDING_STYLE.caretGlow,
+    boxGlow: typeof s.boxGlowEnabled === 'boolean' ? s.boxGlowEnabled : DEFAULT_PENDING_STYLE.boxGlow,
+  });
+
   /** 渲染幽灵 overlay。 */
   const render = (): void => {
     const currentId = currentSessionIdOf(sessions.list.getSnapshot());
     resolve(currentId);
+    // 生成中指示：**在一切早退之前**同步（这一帧可能根本没有幽灵内容——恰恰是在途
+    // 期间没有幽灵，它才必须在这里）。
+    //
+    // 这里不新增任何 render 触发源：用的是已有的 settings（在途位 + 两个开关）与
+    // 已有的 render 调用点。反过来也成立——`syncPendingStyle` 只写属性与一张样式表，
+    // 不调 render、不碰幽灵缓存，所以不会像 #21 那样造出「写→推→render→再写」的回环。
+    overlay.syncPendingStyle(pendingStyleOf(settings), settings.completionPending === true);
     // 幽灵内容先于续写调度计算：调度策略需要「当前幽灵形态」作为入参（`inline`
     // 意味着这份草稿的续写已经显示在屏幕上，不必再问一次）。ghostContent() 是
     // 纯读取 + 结果缓存，挪到前面没有副作用，也让下面的分支复用同一份结果。
@@ -2429,6 +2538,16 @@ function applyBody(ctx: Context): void {
             suggestionSessionId: typeof pushed?.suggestionSessionId === 'string' ? pushed.suggestionSessionId : null,
             // #127：宿主只在 true 时写 ⇒ 缺省即「不在途」。旧宿主不给键也读 false（升级期无害）。
             regenPending: pushed?.regenPending === true,
+            // 续写在途：同一套缺省语义（宿主只在 true 时写）。
+            completionPending: pushed?.completionPending === true,
+            // 指示样式：两键**恒写**（配置语义，不是事件），所以只认真正的布尔值；
+            // 缺失（旧宿主 / 载荷没带）时沿用现值——现值已经与宿主 schema 同缺省。
+            caretGlowEnabled: typeof pushed?.caretGlow === 'boolean'
+              ? pushed.caretGlow
+              : settings.caretGlowEnabled,
+            boxGlowEnabled: typeof pushed?.boxGlow === 'boolean'
+              ? pushed.boxGlow
+              : settings.boxGlowEnabled,
             // 续写：载荷省略 = host 未更新（保留现值，显示时仍以 draft 全等校验兜底）；
             // 显式 null = host 作废（切会话/回合结束清理）。
             completion: pushed?.completion === undefined

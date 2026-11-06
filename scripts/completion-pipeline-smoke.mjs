@@ -323,7 +323,7 @@ run('上界按真宿主实测分布取值，不是按快样本的算术', () => 
   );
 });
 
-run('设置页字段集合与基线一致（#108 之后共 29 项，含两个推理档位、流式投递开关与路由继承开关）', () => {
+run('设置页字段集合与基线一致（#108 之后共 31 项，含两个推理档位、流式投递、路由继承与两个生成中指示开关）', () => {
   const hostSource = readFileSync(fileURLToPath(new URL('../src/index.ts', import.meta.url)), 'utf8');
   // 只截 `const EditableFields = {` 这个对象字面量本身：从起始 brace 找到它自己的
   // `};`。上一版在这里用 indexOf('/** 配置 schema') 取右边界，而源码里那句写在
@@ -363,7 +363,12 @@ run('设置页字段集合与基线一致（#108 之后共 29 项，含两个推
     // #47 新增的 volatile 设置项（会话路由继承开关，默认关）。登记到这里 = 承认它同时牵动了
     // schema、live-settings 键表与设置卡三处；漏一处就是「设置页改了不生效」那个老形状。
     'inheritSessionRoute',
-    'llmEnabled', 'suggestionReasoningEffort', 'streamingDelivery', 'historyEnabled', 'historyCrossSession',
+    'llmEnabled', 'suggestionReasoningEffort', 'streamingDelivery',
+    // 生成中指示的两条（2026-11-06）：**默认值刻意不同** —— 框发光默认开、光标呼吸默认关。
+    // 两者**互不影响**（各出一条 CSS、各挂一个开关），可由用户同时开启；四条组合由
+    // scripts/pending-indicator-smoke.mjs 逐格断言。声明顺序必须与 `EditableFields` 一致。
+    'caretGlowEnabled', 'boxGlowEnabled',
+    'historyEnabled', 'historyCrossSession',
     'historyMaxEntries', 'historyMinChars',
     'inlineEnabled', 'inlineDelayMs', 'inlineMinChars', 'inlineMaxChars', 'completionReasoningEffort',
     'wordAccept', 'acceptKey',
@@ -764,7 +769,11 @@ run('五个出口在 host 侧真的走 traceFault（不是裸 return）', () => 
 
 run('gate 内部的四种收口都清 pending、超时还额外 abort', () => {
   const gateSource = readFileSync(fileURLToPath(new URL('../src/completion-gate.ts', import.meta.url)), 'utf8');
-  assert.match(gateSource, /if \(ownsSlot\) pending\.delete\(sessionId\)/, 'settle 不清 pending');
+  // 2026-11-06：`if (ownsSlot) pending.delete(sessionId)` 的外壳从**无花括号单语句**
+  // 变成带块的形式，因为熄灯回调（生成中指示的 onSettle）必须与删槽**同条件同位置**。
+  // 语义只强不弱：块内仍然只有「删槽 + 一个回调」，而回调本身由
+  // scripts/pending-indicator-smoke.mjs 单独钉住（它断言回调紧跟 delete 之后）。
+  assert.match(gateSource, /if \(ownsSlot\) \{\s*pending\.delete\(sessionId\);/, 'settle 不清 pending');
   assert.match(gateSource, /outcome\.phase === 'timeout'[\s\S]{0,120}controller\.abort\(\)/, '超时没中止底层请求');
 });
 
