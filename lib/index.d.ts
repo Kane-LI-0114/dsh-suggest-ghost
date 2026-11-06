@@ -45,6 +45,8 @@ export interface PluginConfigValues {
     llmEnabled: Volatile<boolean>;
     suggestionReasoningEffort: Volatile<string>;
     streamingDelivery: Volatile<boolean>;
+    caretGlowEnabled: Volatile<boolean>;
+    boxGlowEnabled: Volatile<boolean>;
     historyEnabled: Volatile<boolean>;
     historyCrossSession: Volatile<boolean>;
     historyMaxEntries: Volatile<number>;
@@ -133,6 +135,25 @@ declare const ConfigSchema: z<Schemastery.ObjectS<NoInfer<{
      * 把配置键写进去会被加载期不变量直接抛）。增量帧**不落盘**，所以也不新增任何格。
      */
     streamingDelivery: z<boolean, boolean, "volatile-defined">;
+    /**
+     * 生成中的**光标呼吸**（C1）。**默认关**。
+     *
+     * 效果是让原生 `caret-color` 在语义蓝与主文本色之间来回，用来回答"它到底在不在
+     * 生成"。默认关的理由：它改的是**光标**——编辑器里语义最强的一件东西，而收益
+     * 只是"有反馈"，不该默认替用户动它。
+     *
+     * 与 `boxGlowEnabled` **完全独立**：两者的 CSS 各自成条、各自挂在不同的宿主元素上，
+     * 同时开也是两者叠加，不存在谁盖住谁。
+     */
+    caretGlowEnabled: z<boolean, boolean, "volatile-defined">;
+    /**
+     * 生成中的**输入框呼吸光**（V4）。**默认开**。
+     *
+     * 画在宿主 composer 卡片上（`[data-composer-card]::after` 内描边），不碰宿主的
+     * `box-shadow`、不参与布局。只表达"这个输入区在忙"，**不指位**——补全会落在哪儿
+     * 由幽灵自己说。
+     */
+    boxGlowEnabled: z<boolean, boolean, "volatile-defined">;
     /** 是否启用历史前缀补全。 */
     historyEnabled: z<boolean, boolean, "volatile-defined">;
     /** 是否跨会话搜索历史（false = 仅当前会话）。 */
@@ -292,6 +313,25 @@ declare const ConfigSchema: z<Schemastery.ObjectS<NoInfer<{
      * 把配置键写进去会被加载期不变量直接抛）。增量帧**不落盘**，所以也不新增任何格。
      */
     streamingDelivery: z<boolean, boolean, "volatile-defined">;
+    /**
+     * 生成中的**光标呼吸**（C1）。**默认关**。
+     *
+     * 效果是让原生 `caret-color` 在语义蓝与主文本色之间来回，用来回答"它到底在不在
+     * 生成"。默认关的理由：它改的是**光标**——编辑器里语义最强的一件东西，而收益
+     * 只是"有反馈"，不该默认替用户动它。
+     *
+     * 与 `boxGlowEnabled` **完全独立**：两者的 CSS 各自成条、各自挂在不同的宿主元素上，
+     * 同时开也是两者叠加，不存在谁盖住谁。
+     */
+    caretGlowEnabled: z<boolean, boolean, "volatile-defined">;
+    /**
+     * 生成中的**输入框呼吸光**（V4）。**默认开**。
+     *
+     * 画在宿主 composer 卡片上（`[data-composer-card]::after` 内描边），不碰宿主的
+     * `box-shadow`、不参与布局。只表达"这个输入区在忙"，**不指位**——补全会落在哪儿
+     * 由幽灵自己说。
+     */
+    boxGlowEnabled: z<boolean, boolean, "volatile-defined">;
     /** 是否启用历史前缀补全。 */
     historyEnabled: z<boolean, boolean, "volatile-defined">;
     /** 是否跨会话搜索历史（false = 仅当前会话）。 */

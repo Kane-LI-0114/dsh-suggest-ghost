@@ -443,6 +443,18 @@ export interface CompletionRunDeps<T> {
   readonly deliver: (delivery: CompletionDelivery<T>) => void;
   /** 墙钟上界，默认 `COMPLETION_DEADLINE_MS`；冒烟注入几十毫秒即可离线跑到超时分支。 */
   readonly deadlineMs?: number;
+  /**
+   * 在途位**落定**时回调（本次生成真正不再在途的那一刻）。
+   *
+   * 与 `pending.delete` 放在同一个位置、同一个条件下触发，理由只有一条：
+   * **生成中指示必须和权威在途位同生共死**。若在某个具体出口（比如只有交付那一支）
+   * 里熄灯，而超时 / 被抢先 / 失败 / 被丢弃这几支忘了熄，用户看到的就是一盏永远
+   * 亮着的光——比没有指示更糟：它声称"还在忙"，实际上早就结束了。
+   *
+   * 这里刻意用 `ownsSlot` 而不是无条件触发：槽已被更新草稿接管时，那份条目不属于
+   * 本次，新的那次自会把灯接着点亮，不该被本次顺手熄掉。
+   */
+  readonly onSettle?: () => void;
 }
 
 /** 一次有界生成本身的入参。 */
@@ -516,7 +528,12 @@ export function startBoundedCompletion<T>(deps: CompletionRunDeps<T>, run: Compl
     // 迟到的到达（超时判死之后底层才 settle）：不再留痕，也不再交付。
     if (decision.action === 'skip') return;
     // 只有仍占着槽位时才清：槽已被更新草稿接管时，那份条目不属于这次。
-    if (ownsSlot) pending.delete(sessionId);
+    if (ownsSlot) {
+      pending.delete(sessionId);
+      // 与在途位同条件、同位置：四种出口（交付 / 超时 / 被抢先 / 失败）都会经过这里，
+      // 所以不存在"某条出口忘了熄灯"这种形态（见 `onSettle` 的注释）。
+      deps.onSettle?.();
+    }
     if (decision.action === 'trace') {
       if (outcome.phase === 'timeout') {
         // 超时后必须中止底层请求：只清 Map 不 abort，那个永不 settle 的 llm.stream

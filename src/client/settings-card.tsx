@@ -55,7 +55,7 @@ export const GHOST_FIELDS: ReadonlyArray<{
   readonly label: Bilingual;
   readonly hint: Bilingual;
   readonly kind: FieldKind;
-  readonly section: 'llm' | 'history' | 'inline' | 'language';
+  readonly section: 'llm' | 'history' | 'inline' | 'language' | 'display';
   /** 是否可经设置页写回（false = 只能改配置文件）。 */
   readonly writable: boolean;
   /**
@@ -75,6 +75,32 @@ export const GHOST_FIELDS: ReadonlyArray<{
   /** select 控件的选项列表（仅 kind='select' 时使用）。 */
   readonly options?: ReadonlyArray<{ readonly value: string; readonly label: Bilingual }>;
 }> = [
+  // —— 显示：生成中的指示 ——
+  //
+  // 两个选项**刻意独立**（用户要求互不影响、可同时开启）：文案里各自只说自己的效果，
+  // 不提对方，也不写"同时开启更明显"这类暗示——那会把两个开关读成一档/两档的渐进关系。
+  {
+    key: 'boxGlowEnabled',
+    label: { zh: '生成时输入框发光', en: 'Glow around the input box' },
+    hint: {
+      zh: '生成期间让输入框边缘有一圈呼吸的微光，用来提示还在生成。默认打开。',
+      en: 'Pulse a soft glow around the input box while a suggestion is being generated. On by default.',
+    },
+    kind: 'boolean',
+    section: 'display',
+    writable: true,
+  },
+  {
+    key: 'caretGlowEnabled',
+    label: { zh: '生成时光标呼吸', en: 'Pulse the text cursor' },
+    hint: {
+      zh: '生成期间让输入光标在两种颜色之间缓慢变化。默认关闭。',
+      en: 'Slowly shift the text cursor between two colors while generating. Off by default.',
+    },
+    kind: 'boolean',
+    section: 'display',
+    writable: true,
+  },
   // —— LLM 下一条建议 ——
   {
     key: 'maxInputBytes',
@@ -446,6 +472,7 @@ const zhStrings = {
   configOnly: '策略字段：host 端未开放写入，请改 cordis.patch.yml',
   /** 显示设置 section（仅详情页显示） */
   sectionDisplay: '显示设置',
+  sectionPending: '生成中的提示',
   showInSettings: '在设置中显示',
   showInSettingsHint: '在设置对话框中显示本插件的设置页（刷新页面后生效）',
   /** 分组标题 */
@@ -488,6 +515,7 @@ const enStrings: { [K in keyof typeof zhStrings]: (typeof zhStrings)[K] } = {
   readOnly: 'Not writable in this deployment (in-memory mode)',
   configOnly: 'Strategy field: not writable from the UI — edit cordis.patch.yml',
   sectionDisplay: 'Display',
+  sectionPending: 'While generating',
   showInSettings: 'Show in settings',
   showInSettingsHint: 'Show this plugin\'s settings page in the settings dialog (refresh to take effect)',
   sectionLlm: 'LLM next suggestion',
@@ -1184,6 +1212,7 @@ export function SuggestGhostCard({ scope, locale, surface, modelCatalog, modelCa
   const historyFields = GHOST_FIELDS.filter(f => f.section === 'history');
   const inlineFields = GHOST_FIELDS.filter(f => f.section === 'inline');
   const languageFields = GHOST_FIELDS.filter(f => f.section === 'language');
+  const pendingFields = GHOST_FIELDS.filter(f => f.section === 'display');
 
   /** Section 布局：grid = 两列并排（适合短字段），stack = 单列堆叠。 */
   const SECTION_LAYOUT: Record<string, 'grid' | 'stack'> = {
@@ -1191,6 +1220,8 @@ export function SuggestGhostCard({ scope, locale, surface, modelCatalog, modelCa
     history: 'stack',
     inline: 'stack',
     language: 'grid',
+    // 两个开关都带一句话说明 ⇒ 单列堆叠，别挤成两栏（挤了说明会折成三行）。
+    display: 'stack',
   };
 
   return (
@@ -1234,6 +1265,10 @@ export function SuggestGhostCard({ scope, locale, surface, modelCatalog, modelCa
       <section className="sgc-section" aria-labelledby="sgc-section-inline">
         <h3 className="sgc-section-heading" id="sgc-section-inline">{t.sectionInline}</h3>
         <div className={SECTION_LAYOUT.inline === 'grid' ? 'sgc-section-fields sgc-section-fieldsGrid' : 'sgc-section-fields'}>{renderFieldRun(inlineFields)}</div>
+      </section>
+      <section className="sgc-section" aria-labelledby="sgc-section-pending">
+        <h3 className="sgc-section-heading" id="sgc-section-pending">{t.sectionPending}</h3>
+        <div className={SECTION_LAYOUT.display === 'grid' ? 'sgc-section-fields sgc-section-fieldsGrid' : 'sgc-section-fields'}>{renderFieldRun(pendingFields)}</div>
       </section>
       <section className="sgc-section" aria-labelledby="sgc-section-language">
         <h3 className="sgc-section-heading" id="sgc-section-language">{t.sectionLanguage}</h3>

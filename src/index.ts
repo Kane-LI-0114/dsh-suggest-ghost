@@ -189,6 +189,25 @@ const EditableFields = {
    * 把配置键写进去会被加载期不变量直接抛）。增量帧**不落盘**，所以也不新增任何格。
    */
   streamingDelivery: z.boolean().default(false).volatile(),
+  /**
+   * 生成中的**光标呼吸**（C1）。**默认关**。
+   *
+   * 效果是让原生 `caret-color` 在语义蓝与主文本色之间来回，用来回答"它到底在不在
+   * 生成"。默认关的理由：它改的是**光标**——编辑器里语义最强的一件东西，而收益
+   * 只是"有反馈"，不该默认替用户动它。
+   *
+   * 与 `boxGlowEnabled` **完全独立**：两者的 CSS 各自成条、各自挂在不同的宿主元素上，
+   * 同时开也是两者叠加，不存在谁盖住谁。
+   */
+  caretGlowEnabled: z.boolean().default(false).volatile(),
+  /**
+   * 生成中的**输入框呼吸光**（V4）。**默认开**。
+   *
+   * 画在宿主 composer 卡片上（`[data-composer-card]::after` 内描边），不碰宿主的
+   * `box-shadow`、不参与布局。只表达"这个输入区在忙"，**不指位**——补全会落在哪儿
+   * 由幽灵自己说。
+   */
+  boxGlowEnabled: z.boolean().default(true).volatile(),
   /** 是否启用历史前缀补全。 */
   historyEnabled: z.boolean().default(true).volatile(),
   /** 是否跨会话搜索历史（false = 仅当前会话）。 */
@@ -318,6 +337,8 @@ export interface PluginConfigValues {
   llmEnabled: Volatile<boolean>;
   suggestionReasoningEffort: Volatile<string>;
   streamingDelivery: Volatile<boolean>;
+  caretGlowEnabled: Volatile<boolean>;
+  boxGlowEnabled: Volatile<boolean>;
   historyEnabled: Volatile<boolean>;
   historyCrossSession: Volatile<boolean>;
   historyMaxEntries: Volatile<number>;
@@ -1498,6 +1519,10 @@ export function apply(ctx: Context, config: GenerateConfig): void {
     const controller = new AbortController();
     completionPending.set(sessionId, controller);
     completionInflightDraft.set(sessionId, draft);
+    // 在途位进载荷 ⇒ **开跑即推一次**。不推的话「开始生成」这个边沿就没有任何写入，
+    // 客户端要等下一条无关载荷（下一次 pull / 热度变化 / 续写落地）才看见它——
+    // 而落地那一次已经该熄灯了。这一条与 #127 的 `settleRegen` 末尾那次推送同构。
+    pushToClient(statePushOf(sessionId));
     /**
      * 本轮生成**用掉的**界面语言快照（#137）。取在启动生成的同一同步 tick 上；
      * **不能**到收口回调里再读 `clientUiLocale`——deliver 是异步的（一次生成 5~10s），
@@ -1517,6 +1542,14 @@ export function apply(ctx: Context, config: GenerateConfig): void {
         // 显式把上界传在这里，而不是靠模块默认值：现场读 `handleComplete` 就该看见
         // 「这条链有界、界是常量 COMPLETION_DEADLINE_MS」这件事。
         deadlineMs: COMPLETION_DEADLINE_MS,
+        /**
+         * 在途位落定 ⇒ 立刻推一次，让生成中指示熄灯。
+         *
+         * 为什么不能只靠 `deliver` 里那次推送：`deliver` 只在**交付成功**那一支被调用，
+         * 而超时 / 被抢先 / 失败 / 答了但被净化链丢弃这四种结局都不交付——只靠它，
+         * 那四种结局下的光会一直亮着。指示必须与权威在途位同生共死（见 `onSettle`）。
+         */
+        onSettle: () => { pushToClient(statePushOf(sessionId)); },
         deliver: ({ value, elapsedMs }) => {
           // 增量画像（#39）。既有前缀与既有键**一个字不动**（package.json 的
           // sandbox.greps 与 scripts/dev-sandbox.mjs 靠它们抓行），新键一律**行尾追加**。
@@ -1593,6 +1626,26 @@ export function apply(ctx: Context, config: GenerateConfig): void {
      * 抹掉（#136 实测 `error` 键就是这么丢的）。只在 `true` 时写 ⇒ 常态零额外字节。
      */
     readonly regenPending?: boolean;
+    /**
+     * 续写**在途**（生成中指示用）。与 `regenPending` 同一条纪律：**每次组装载荷时
+     * 现算**（`completionPendingFor`），不是一次性写进去等它自己消失——`_push` 是
+     * 省略式拼装，任何一次无关推送都会把"写过的 true"整条抹掉（#136 在 `error`
+     * 键上实测过）。
+     *
+     * 只在 `true` 时写 ⇒ 常态零额外字节；旧宿主不给这个键 ⇒ 客户端永远读成"不在途"，
+     * 滚动升级期间只是没有指示，不会误亮。
+     */
+    readonly completionPending?: boolean;
+    /**
+     * 指示样式的**实时值**（两个独立开关）。
+     *
+     * 为什么走载荷而不只走配置行：客户端已有的解析路径就是「读 `_push` → 算幽灵」，
+     * 把样式塞进同一次读取里，开关一改下一帧就生效，不需要客户端再挂一条配置订阅。
+     * 两个键**各自独立**、都恒写（不是只在 true 时写）——它们是配置值不是事件，
+     * 省略语义会让"关掉"和"没说过"同形。
+     */
+    readonly caretGlow?: boolean;
+    readonly boxGlow?: boolean;
   }
 
   /**
@@ -1624,6 +1677,11 @@ export function apply(ctx: Context, config: GenerateConfig): void {
     readonly completion?: { readonly draft: string; readonly text: string; readonly final?: boolean } | null;
     readonly completionSessionId?: string | null;
     readonly error?: string;
+    /** 续写在途（见 `ClientPush.completionPending`）。 */
+    readonly completionPending?: boolean;
+    /** 指示样式开关的实时值（见 `ClientPush.caretGlow`）。 */
+    readonly caretGlow?: boolean;
+    readonly boxGlow?: boolean;
   };
   type HotSig = {
     readonly hot: readonly { text: string; count: number; pinned?: boolean }[] | null;
@@ -1641,7 +1699,12 @@ export function apply(ctx: Context, config: GenerateConfig): void {
       : o.completion === undefined
         ? '∄' // 未携带（保留 client 现值）
         : `${o.completionSessionId ?? ''}#${o.completion.draft}=${o.completion.text}`;
-    return `${sug}<CPL>${completionKey}<ERR>${o.error ?? ''}`;
+    // 在途位与两个样式位都进指纹：前者不进的话「开始生成」那一次写入会和上一次
+    // 逐字节相同而被载荷去重掉（指示永远不亮）；后者不进的话改了开关要等下一次
+    // 无关变化才生效。
+    const pendingKey = o.completionPending === true ? 'P' : '∅';
+    const styleKey = `${o.caretGlow === true ? 'c' : '-'}${o.boxGlow === true ? 'b' : '-'}`;
+    return `${sug}<CPL>${completionKey}<ERR>${o.error ?? ''}<PND>${pendingKey}<STY>${styleKey}`;
   };
 
   const hotSigOf = (o: HotSig): string => {
@@ -1687,6 +1750,11 @@ export function apply(ctx: Context, config: GenerateConfig): void {
     // #127：只在 true 时写（省略即「不在途」）。`_push` 的指纹据此变格——
     // 「在途开始」与「在途结束」各推一次，客户端的置灰/恢复各有明确边沿。
     ...(p.regenPending === true ? { regenPending: true } : {}),
+    // 生成中指示：三个键都必须**随载荷现算**。前两个只在 true 时写（事件语义），
+    // 后两个恒写（配置语义：省略会让"关掉"与"没说过"同形）。
+    ...(p.completionPending === true ? { completionPending: true } : {}),
+    caretGlow: p.caretGlow === true,
+    boxGlow: p.boxGlow === true,
   });
 
   /** 热度格的载荷（热度快照 / 总数 / 历史环）。 */
@@ -2749,6 +2817,12 @@ export function apply(ctx: Context, config: GenerateConfig): void {
           : {}),
       // 现算，不缓存（见 `ClientPush.regenPending` 的注释）。
       ...(regenPendingFor(sessionId) ? { regenPending: true } : {}),
+      // 生成中指示：在途位同样现算（理由见 `ClientPush.completionPending`）；
+      // 两个样式开关取自 boot 配置的裸值——volatile 引用在每次读取时都反映最新
+      // 设置页取值，所以「改了开关 → 下一次任何推送就带上新值」。
+      ...(completionPendingFor(sessionId) ? { completionPending: true } : {}),
+      caretGlow: bootSettings.caretGlowEnabled === true,
+      boxGlow: bootSettings.boxGlowEnabled !== false,
     };
   };
 
@@ -2957,6 +3031,20 @@ export function apply(ctx: Context, config: GenerateConfig): void {
   /** 该会话此刻有没有重出在途（载荷派生用；判据不读它，判据读 `SessionState.regen`）。 */
   const regenPendingFor = (sessionId: string | null): boolean =>
     sessionId !== null && regenInFlight.has(sessionId);
+
+  /**
+   * 该会话此刻有没有**续写在途**（生成中指示的判据）。
+   *
+   * 权威源就是 `completionPending` 这个 Map：它 set 在发起处、delete 在收口处
+   * （`startBoundedCompletion` 的 settle，四种出口都走它），所以「槽里有活 controller」
+   * 恰等于「这次续写还没落地」。不另建一个布尔变量：两处状态迟早会分叉，而分叉的
+   * 表现正好就是「光一直亮着」或「生成中却黑着」这种最难查的形态。
+   *
+   * 判据取 `sessionId` 而不是"任意会话在途"：`_push` 是单槽，把 A 会话的在途算到
+   * B 会话的载荷上，会让用户切过去看到一个不属于自己的"正在生成"。
+   */
+  const completionPendingFor = (sessionId: string | null): boolean =>
+    sessionId !== null && completionPending.has(sessionId);
 
   /** 收尾一次重出：摘在途、清 `SessionState.regen`，并把此刻的状态推出去（pending 落到 false）。 */
   const settleRegen = (state: SessionState, sessionId: string): void => {

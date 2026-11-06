@@ -138,6 +138,10 @@ export interface Config {
 export interface EditableConfig {
   llmEnabled?: Volatile<boolean> | boolean;
   streamingDelivery?: Volatile<boolean> | boolean;
+  /** 生成中的光标呼吸（C1，默认关）。 */
+  caretGlowEnabled?: Volatile<boolean> | boolean;
+  /** 生成中的输入框呼吸光（V4，默认开）。 */
+  boxGlowEnabled?: Volatile<boolean> | boolean;
   /** 重出开关（#127）。volatile：设置页要能改，且改了不必重启。 */
   regenEnabled?: Volatile<boolean> | boolean;
   /** 重出快捷键 spec（#127）。volatile，判据与 `acceptKey` 同套（空串丢弃回落默认）。 */
@@ -182,6 +186,10 @@ function readVolatile<T>(value: unknown, fallback: T): T {
 export type FlatConfig = Config & {
   llmEnabled: boolean;
   streamingDelivery: boolean;
+  /** 生成中的光标呼吸（C1，默认关）。 */
+  caretGlowEnabled: boolean;
+  /** 生成中的输入框呼吸光（V4，默认开）。 */
+  boxGlowEnabled: boolean;
   historyEnabled: boolean;
   historyCrossSession: boolean;
   historyMaxEntries: number;
@@ -209,6 +217,10 @@ export function flattenConfig(config: ResolvedPluginConfig): FlatConfig {
     ...config,
     llmEnabled: readVolatile(config.llmEnabled, true),
     streamingDelivery: readVolatile(config.streamingDelivery, false),
+    // 生成中指示（默认值刻意不同：V4 开、C1 关，理由见 index.ts 的字段注释）。
+    // 与 schema 的 `.default()` 逐字同值，scripts/pending-indicator-smoke.mjs 逐处核对。
+    caretGlowEnabled: readVolatile(config.caretGlowEnabled, false),
+    boxGlowEnabled: readVolatile(config.boxGlowEnabled, true),
     acceptKey: readVolatile(config.acceptKey, 'Tab'),
     historyEnabled: readVolatile(config.historyEnabled, true),
     historyCrossSession: readVolatile(config.historyCrossSession, false),
