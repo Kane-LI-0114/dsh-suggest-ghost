@@ -138,9 +138,11 @@ The reason splits into two calibres, and they must not be conflated (measured 20
 - **Install side** (npm/pnpm resolving peers, no `includePrerelease`): node-semver excludes prereleases from
   every range unless a comparator carries the same `[major.minor.patch]` tuple, so `^0.1.2-rc.1` is false for
   `0.1.5-rc.1`, and so is `*` — **no range spans generations**, and every new rc needs another entry.
+  ✅ Fixed 2026-11-09 (issue #149): peerDependencies now includes `^0.2.2-alpha.2`, so the install side matches 0.2.2 prereleases.
 - **Admission side** (what the kernel actually runs: `semver.satisfies(v, range, { includePrerelease: true })`):
-  measured, `^0.1.2-rc.1` **covers all of 0.1.x** (including `0.1.7-rc.1`), and `^0.2.0-rc.2` covers everything
-  in `>=0.2.0-rc.2 <0.3.0-0` (including `0.2.1-rc.5` and `0.2.2-alpha.2`) — while all of those are false on npm's calibre.
+  measured, `^0.1.2-rc.1` **covers all of 0.1.x** (including `0.1.7-rc.1`), `^0.2.0-rc.2` covers everything
+  in `>=0.2.0-rc.2 <0.2.2-0` (including `0.2.1-rc.5`), and `^0.2.2-alpha.2` covers everything
+  in `>=0.2.2-alpha.2 <0.2.3-0` (including `0.2.2-rc.1`) — while all of those are false on npm's calibre.
 
 ⇒ **"Add an enumeration entry" is an install-side concern, not an admission requirement.** That is why this repo
 did **not** widen its peer ranges for an alpha line (doing so writes an unverified generation into the support

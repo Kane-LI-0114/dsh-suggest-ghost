@@ -199,11 +199,23 @@ run('completionPendingFor 读的是权威 Map，且按会话判定', () => {
   assert.match(body, /sessionId !== null/, '没有排除 null 会话（会把任意会话的在途算到别人头上）');
 });
 
-run('在途位与两个样式位都进了载荷指纹', () => {
+run('在途位进指纹，两个样式位**不进**（进了会把 #36 拆两格的收益还回去）', () => {
+  // 取 `pushSigOf` 的**函数体**（到它的收尾 `};` 为止）。早先这一版只截前 1200 字符，
+  // 把后面 `pushFingerprintOfPersisted` 里构造载荷的那几行也算进来了 —— 于是
+  // 「caretGlow 出现在源码里」被误当成「它进了指纹」，让这条断言守住了**错的行为**。
   const sigAt = host.indexOf('const pushSigOf = (');
-  const body = host.slice(sigAt, sigAt + 1200);
+  assert.ok(sigAt > 0, '找不到 pushSigOf');
+  const sigEnd = host.indexOf('\n  };', sigAt);
+  assert.ok(sigEnd > sigAt, 'pushSigOf 的收尾定位失败');
+  // 先剥掉注释再断言：`pushSigOf` 的注释里**故意**逐字写了这两个键名（解释它们为什么
+  // 不进指纹），不剥离的话这条断言会被自己的说明文字绊红 —— 那正是本次已经踩过一次的
+  // 「断言查的是散文而不是代码」。
+  const body = host.slice(sigAt, sigEnd)
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
   assert.match(body, /completionPending/, '在途位没进指纹：开始生成那一次写入会被载荷去重掉（指示永远不亮）');
-  assert.match(body, /caretGlow/, '样式位没进指纹：改了开关要等下一次无关变化才生效');
+  assert.doesNotMatch(body, /caretGlow|boxGlow/,
+    '样式位进了建议格指纹：任何一次推送都可能把建议格判脏（实测 cells=both），#36 拆两格的收益被还回去');
 });
 
 console.log('\n—— 设置页（两个开关都要能被用户改到）——');
