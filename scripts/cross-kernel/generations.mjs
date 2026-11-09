@@ -187,7 +187,7 @@ export const KERNEL_GENERATIONS = [
     observedEntries: 306,
     notes:
       '分水岭：0.2.1 起 engines.dsh **单独决定**准入（老内核不读它）。' +
-      '注意本仓 engines.dsh 的上界 `>=0.2.0-rc.2 <0.3.0-0` 覆盖本代，peer 枚举也含本代。',
+      '注意本仓 engines.dsh 的范围 `>=0.2.0-rc.2 <0.2.2-0` 覆盖本代，peer 枚举也含本代。',
   },
   {
     // issue #121（内核 0.2.2 适配）登记。登这一代**不是**宣称"支持 0.2.2"，而是让
@@ -210,7 +210,29 @@ export const KERNEL_GENERATIONS = [
       '⚠️ 但**安装面**（npm/pnpm 自己解 peer，`includePrerelease: false`）不匹配：' +
       '`^0.2.0-rc.2` 对 0.2.2-alpha.2 返回 false。这是"装不进 workspace"级的约束，' +
       '**不是**"内核拒绝装载"级的约束，两者不可混（issue #121 第 4 条只说了前一半）。' +
+      '✅ 2026-11-09 修复（issue #149）：package.json peerDependencies 已补 `^0.2.2-alpha.2`，' +
+      '安装面现在匹配本代。' +
       '本代是 alpha：**不构成对 0.2.2 正式版的承诺**，正式版发布后要另登一条重跑才有结论。',
+  },
+  {
+    // issue #149（内核 0.2.2-rc.1 已是 latest，但 engines.dsh 匹配不到）登记。
+    // 0.2.2-rc.1 于 2026-11-04 发布并转正 `latest`，代码已按 #121 完成适配（0.9.0），
+    // 但声明面把新内核整个挡在门外。修复：engines.dsh 追加 `>=0.2.2-alpha.2 <0.2.3-0`，
+    // peerDependencies 补 `^0.2.2-alpha.2`。
+    id: '0.2.2-rc.1',
+    peerRange: '^0.2.2-alpha.2',
+    bootModel: 'app-boot',
+    hasAppBoot: true,
+    hasDshBase: true,
+    observedEntries: null, // 待现场安装后填写
+    notes:
+      '2026-11-04 发布，当前 `latest`。代码适配完成（0.9.0，按 #121），但 engines.dsh 旧范围' +
+      ' `>=0.2.0-rc.2 <0.3.0-0` 在 node-semver 默认规则下匹配不到 0.2.2-rc.1（tuple [0,2,2] ' +
+      '上没有预发布限定符），导致插件被硬 skip。' +
+      '✅ 2026-11-09 修复：engines.dsh 改为 ' +
+      '`>=0.1.2-rc.1 <0.2.0-0 || >=0.2.0-rc.2 <0.2.2-0 || >=0.2.2-alpha.2 <0.2.3-0`，' +
+      'peerDependencies 补 `^0.2.2-alpha.2`。' +
+      '本代是 rc：**不构成对 0.2.2 正式版的承诺**，正式版发布后要另登一条重跑才有结论。',
   },
 ];
 

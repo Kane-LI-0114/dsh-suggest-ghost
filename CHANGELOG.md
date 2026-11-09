@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### 修复
+
+- **engines.dsh 与 peerDependencies 匹配 0.2.2-rc.1（Gitea #149）**：内核 0.2.2-rc.1 于 2026-11-04 发布并转正 `latest`，
+  代码已按 #121 完成 0.2.2 契约适配（0.9.0），但声明面把新内核整个挡在门外——`engines.dsh` 旧范围 `>=0.2.0-rc.2 <0.3.0-0`
+  在 node-semver 默认规则下匹配不到 `0.2.2-rc.1`（tuple `[0,2,2]` 上没有预发布限定符），导致插件被硬 skip。
+  修复：`engines.dsh` 改为 `>=0.1.2-rc.1 <0.2.0-0 || >=0.2.0-rc.2 <0.2.2-0 || >=0.2.2-alpha.2 <0.2.3-0`，
+  `peerDependencies` 各 dsh-* 包补 `^0.2.2-alpha.2`。
+
 ### 新增
 
 - **生成中的两个独立指示**（Gitea #147）：框呼吸光（V4，默认**开**）与光标呼吸（C1，默认**关**）。
