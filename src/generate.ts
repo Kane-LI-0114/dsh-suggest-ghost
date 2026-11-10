@@ -217,10 +217,11 @@ export function flattenConfig(config: ResolvedPluginConfig): FlatConfig {
     ...config,
     llmEnabled: readVolatile(config.llmEnabled, true),
     streamingDelivery: readVolatile(config.streamingDelivery, false),
-    // 生成中指示（默认值刻意不同：V4 开、C1 关，理由见 index.ts 的字段注释）。
-    // 与 schema 的 `.default()` 逐字同值，scripts/pending-indicator-smoke.mjs 逐处核对。
+    // 生成中指示（2026-11-09 起**两项都默认关**并按实验性发布，理由见 index.ts 的
+    // 字段注释）。与 schema 的 `.default()` 逐字同值，
+    // scripts/pending-indicator-smoke.mjs 逐处核对。
     caretGlowEnabled: readVolatile(config.caretGlowEnabled, false),
-    boxGlowEnabled: readVolatile(config.boxGlowEnabled, true),
+    boxGlowEnabled: readVolatile(config.boxGlowEnabled, false),
     acceptKey: readVolatile(config.acceptKey, 'Tab'),
     historyEnabled: readVolatile(config.historyEnabled, true),
     historyCrossSession: readVolatile(config.historyCrossSession, false),

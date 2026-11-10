@@ -26,16 +26,22 @@
 
 /** 两个指示的开关（来自用户设置；缺省值见 {@link DEFAULT_PENDING_STYLE}）。 */
 export interface PendingStyleSettings {
-  /** C1：生成期间让原生光标呼吸（`caret-color`）。**默认关**。 */
+  /** C1：生成期间让原生光标呼吸（`caret-color`）。**默认关，实验性**。 */
   readonly caretGlow: boolean;
-  /** V4：生成期间输入框呼吸一圈内描边光。**默认开**。 */
+  /** V4：生成期间输入框呼吸一圈内描边光。**默认关，实验性**。 */
   readonly boxGlow: boolean;
 }
 
-/** 设置的缺省值：C1 关、V4 开（用户指定）。 */
+/**
+ * 设置的缺省值：**两项都关**（2026-11-09 起按实验性发布）。
+ *
+ * 与 `dsh-later` 的「高级语法」同一口径：默认关、设置里标「实验性」、想用的人自己开。
+ * 理由不是"没做完"，而是**观感与干扰程度要用真实使用来观察**——本环境一次健康续写
+ * 在途 19~28 秒，指示在这段长等里是帮忙还是添乱，只有用过的人知道。
+ */
 export const DEFAULT_PENDING_STYLE: PendingStyleSettings = Object.freeze({
   caretGlow: false,
-  boxGlow: true,
+  boxGlow: false,
 });
 
 /** 一次绘制要应用的两条声明；`null` = 这个指示关闭，不产出任何声明。 */

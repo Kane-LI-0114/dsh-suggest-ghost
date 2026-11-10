@@ -52,29 +52,31 @@ const card = readFileSync(fileURLToPath(new URL('../src/client/settings-card.tsx
 const flat = readFileSync(fileURLToPath(new URL('../src/generate.ts', import.meta.url)), 'utf8');
 const live = readFileSync(fileURLToPath(new URL('../src/live-settings.ts', import.meta.url)), 'utf8');
 
-console.log('\n—— 默认值（用户指定：C1 关、V4 开）——');
+console.log('\n—— 默认值（2026-11-09 起两项都关，按实验性发布）——');
 
-run('纯模块的缺省是 C1 关 / V4 开', () => {
+run('纯模块的缺省是两项都关', () => {
+  // 与 dsh-later 的「高级语法」同一口径：默认关、设置里标「实验性」、想用的人自己开。
+  // 理由不是"没做完"，而是观感与干扰程度要用真实使用观察（本环境在途 19~28 秒）。
   assert.equal(DEFAULT_PENDING_STYLE.caretGlow, false);
-  assert.equal(DEFAULT_PENDING_STYLE.boxGlow, true);
+  assert.equal(DEFAULT_PENDING_STYLE.boxGlow, false);
 });
 
 run('宿主 schema 的默认值与纯模块逐字一致', () => {
   // schema 里写的是 z.boolean().default(...)：取出现的那一行，逐条对。
   assert.match(host, /caretGlowEnabled:\s*z\.boolean\(\)\.default\(false\)/,
     'caretGlowEnabled 的 schema 默认值不是 false（应关）');
-  assert.match(host, /boxGlowEnabled:\s*z\.boolean\(\)\.default\(true\)/,
-    'boxGlowEnabled 的 schema 默认值不是 true（应开）');
+  assert.match(host, /boxGlowEnabled:\s*z\.boolean\(\)\.default\(false\)/,
+    'boxGlowEnabled 的 schema 默认值不是 false（实验性，应关）');
 });
 
 run('flattenConfig 的回落值与 schema 同值', () => {
   assert.match(flat, /caretGlowEnabled:\s*readVolatile\(config\.caretGlowEnabled,\s*false\)/);
-  assert.match(flat, /boxGlowEnabled:\s*readVolatile\(config\.boxGlowEnabled,\s*true\)/);
+  assert.match(flat, /boxGlowEnabled:\s*readVolatile\(config\.boxGlowEnabled,\s*false\)/);
 });
 
 run('客户端的缺省与宿主同值（旧宿主 / 载荷缺失时行为一致）', () => {
   assert.match(client, /caretGlowEnabled:\s*false,/);
-  assert.match(client, /boxGlowEnabled:\s*true,/);
+  assert.match(client, /boxGlowEnabled:\s*false,/);
 });
 
 console.log('\n—— 两个选项互不影响（四种组合 × 在途）——');
@@ -234,6 +236,19 @@ run('两个键都有卡片字段且可写，并各自独立成条', () => {
     assert.match(block, /kind: 'boolean'/, `${key} 不是开关`);
     assert.match(block, /writable: true/, `${key} 不可写（用户改了保存会静默无效）`);
   }
+});
+
+run('设置卡把这个分组标成「实验性」（与 dsh-later 的「高级语法」同形态）', () => {
+  // 默认关 + 标题挂徽章是**一套**口径：只改默认值不挂徽章，用户会以为功能没做；
+  // 只挂徽章默认开，就成了"拿用户当小白鼠"。两条必须同时在。
+  assert.match(card, /key: 'caretGlowEnabled'[\s\S]{0,400}?section: 'display'/, 'C1 不在 display 分组');
+  assert.match(card, /key: 'boxGlowEnabled'[\s\S]{0,400}?section: 'display'/, 'V4 不在 display 分组');
+  const sectionAt = card.indexOf('id="sgc-section-pending"');
+  assert.ok(sectionAt > 0, '找不到「生成中的提示」这一节');
+  assert.match(card.slice(sectionAt, sectionAt + 600), /sgc-beta/, '这一节标题后没有挂实验性徽章');
+  assert.match(card, /betaBadge:\s*'实验性'/, 'zh 文案里没有「实验性」');
+  assert.match(card, /betaBadge:\s*'Beta'/, 'en 文案里没有 Beta');
+  assert.match(card, /betaBadgeAria:/, '徽章缺 aria-label（读屏用户只听到一个孤立的词）');
 });
 
 console.log(`\n${passed} 项通过${process.exitCode ? '，有失败' : ''}\n`);

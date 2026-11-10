@@ -17,6 +17,8 @@ const COMPONENTS = [
   /* ==================== Section 分组 ==================== */
   '.sgc-section{padding:16px 0}',
   '.sgc-section-heading{margin:0;font-size:13px;font-weight:600;line-height:1.5;color:var(--dsw-alias-label-primary)}',
+  /* 实验性徽章：数值照抄 dsh-later 的 .ss-section-beta（同一视觉语言，跨插件一致）。 */
+  '.sgc-beta{display:inline-flex;align-items:center;padding:1px 8px;margin-left:8px;font-size:11px;font-weight:500;line-height:17px;color:var(--dsw-alias-state-business-primary);background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 10%,transparent);border-radius:999px;corner-shape:round;white-space:nowrap;vertical-align:middle}',
   '.sgc-section-fields{display:flex;flex-direction:column}',
   /* 两列并排网格（对齐 dsh-later 的 grid 布局） */
   '.sgc-section-fieldsGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}',

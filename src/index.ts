@@ -190,24 +190,28 @@ const EditableFields = {
    */
   streamingDelivery: z.boolean().default(false).volatile(),
   /**
-   * 生成中的**光标呼吸**（C1）。**默认关**。
+   * 生成中的**光标呼吸**（C1）。**默认关，实验性**。
    *
    * 效果是让原生 `caret-color` 在语义蓝与主文本色之间来回，用来回答"它到底在不在
-   * 生成"。默认关的理由：它改的是**光标**——编辑器里语义最强的一件东西，而收益
-   * 只是"有反馈"，不该默认替用户动它。
+   * 生成"。默认关的两条理由：①它改的是**光标**——编辑器里语义最强的一件东西；
+   * ②本环境的在途时长实测 19~28 秒，指示本身该在真实使用里先观察一轮。
    *
    * 与 `boxGlowEnabled` **完全独立**：两者的 CSS 各自成条、各自挂在不同的宿主元素上，
    * 同时开也是两者叠加，不存在谁盖住谁。
    */
   caretGlowEnabled: z.boolean().default(false).volatile(),
   /**
-   * 生成中的**输入框呼吸光**（V4）。**默认开**。
+   * 生成中的**输入框呼吸光**（V4）。**默认关，实验性**。
    *
    * 画在宿主 composer 卡片上（`[data-composer-card]::after` 内描边），不碰宿主的
    * `box-shadow`、不参与布局。只表达"这个输入区在忙"，**不指位**——补全会落在哪儿
    * 由幽灵自己说。
+   *
+   * 默认关（2026-11-09 改）：这两项整体按"实验性"发布——观感与在 19~28 秒长当下的
+   * 干扰程度仍需真实使用观察，与 `dsh-later` 的「高级语法」同一口径：默认关、
+   * 设置里标「实验性」、想用的人自己打开。
    */
-  boxGlowEnabled: z.boolean().default(true).volatile(),
+  boxGlowEnabled: z.boolean().default(false).volatile(),
   /** 是否启用历史前缀补全。 */
   historyEnabled: z.boolean().default(true).volatile(),
   /** 是否跨会话搜索历史（false = 仅当前会话）。 */

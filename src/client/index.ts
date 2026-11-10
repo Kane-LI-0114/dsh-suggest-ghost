@@ -105,6 +105,9 @@ import {
   DEFAULT_PENDING_STYLE,
 } from './pending-indicator.js';
 import type { PendingStyleSettings } from './pending-indicator.js';
+// 在途状态机：本地点亮、本地熄灭，不依赖 `_push` 的时序（实测它会在终点前只亮 1~2 秒）。
+import { shouldFollowHostFalse, startPending, tickPending } from './pending-clock.js';
+import type { PendingState } from './pending-clock.js';
 
 /** 宿主 `session.modelCatalog()` 的原始行（只声明要读的字段）。 */
 interface RawModelCatalogModel {
@@ -474,6 +477,16 @@ const PULL_MAX_ATTEMPTS = 4;
  * `conflict retries exhausted`。重试不是免费的，第一次也要等得起。
  */
 const PULL_RETRY_BASE_MS = 600;
+/**
+ * 生成中指示的最短可见时长。短于此的亮灭在观感上就是"闪了一下"，等于没有指示；
+ * 宁可多亮半秒也不闪。
+ */
+const PENDING_MIN_VISIBLE_MS = 1200;
+/**
+ * 生成中指示的硬上限。略长于宿主侧续写墙钟上界（45s）：超过它还没收口，说明宿主那
+ * 一边已经出问题，灯必须自己熄 —— 一盏永远亮着的灯比没有指示更糟（它在撒谎）。
+ */
+const PENDING_DEADLINE_MS = 60_000;
 
 /** 插件名（与 manifest id 一致）。 */
 const name = 'dsh-suggest-ghost';
@@ -1496,10 +1509,10 @@ function applyBody(ctx: Context): void {
     regenKey: 'Alt+G',
     regenPending: false,
     completionPending: false,
-    // 缺省与宿主 schema 逐字同值（C1 关 / V4 开）：旧宿主、载荷缺失、冷启动
-    // 三种情况下客户端都按这套走，与宿主侧行为一致。
+    // 缺省与宿主 schema 逐字同值（2026-11-09 起两项都默认关，实验性）：旧宿主、
+    // 载荷缺失、冷启动三种情况下客户端都按这套走，与宿主侧行为一致。
     caretGlowEnabled: false,
-    boxGlowEnabled: true,
+    boxGlowEnabled: false,
     suggestion: cached.suggestion ?? null,
     // 缓存里的建议可能来自上一进程；帧提示一起持久化，避免把 provisional 帧的
     // 建议冷启动后当成终帧采纳（读不到时按旧载荷兜底）。
@@ -1832,6 +1845,79 @@ function applyBody(ctx: Context): void {
     boxGlow: typeof s.boxGlowEnabled === 'boolean' ? s.boxGlowEnabled : DEFAULT_PENDING_STYLE.boxGlow,
   });
 
+  /**
+   * 本地在途状态（`null` = 不在途）。
+   *
+   * 这是指示的**主**判据：客户端在写出 `complete` 的那一刻自己点亮，收到续写或
+   * 宿主宣告在途结束时自己熄灭。宿主推来的 `completionPending` 只作为佐证，不
+   * 直接驱动灯 —— 实测它的时序会在终点前只亮 1~2 秒（见 `pending-clock.ts` 头）。
+   */
+  let localPending: PendingState = null;
+  /** 为"最短可见时长"排的定时器（收口时清掉，避免空转）。 */
+  let pendingFloorTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /**
+   * 熄灭并重绘。
+   *
+   * `render()` 里会重新 tick 一次本地在途；这里把状态置空后直接调它，避免出现
+   * "状态已变但界面还没变"的那一帧。
+   */
+  const settleLocalPending = (): void => {
+    if (localPending === null) return;
+    localPending = null;
+    if (pendingFloorTimer !== null) {
+      clearTimeout(pendingFloorTimer);
+      pendingFloorTimer = null;
+    }
+    render();
+  };
+
+  /**
+   * 点亮（写出 `complete` 的同时调用）。
+   *
+   * 同时排一个**兜底重绘**：本状态机的过期判据要求有人来 tick，而宿主侧的推送可能
+   * 一次都不来（合并窗口全吞了），那时灯会一直亮到用户下一次打字才熄。这个定时器
+   * 保证最迟 `PENDING_DEADLINE_MS` 后一定收口，与最短可见时长无关。
+   */
+  const lightLocalPending = (sessionId: string, draft: string): void => {
+    localPending = startPending(sessionId, draft, Date.now());
+    if (pendingFloorTimer !== null) {
+      clearTimeout(pendingFloorTimer);
+      pendingFloorTimer = null;
+    }
+    pendingFloorTimer = setTimeout(() => {
+      pendingFloorTimer = null;
+      // 走同一条 render：tick 会在里面判过期并就地收口。
+      render();
+    }, PENDING_DEADLINE_MS + 50);
+    render();
+  };
+
+  /**
+   * 本帧是否应当点亮指示。
+   *
+   * 顺序：本地在途优先；本地没有时才看宿主推来的在途位（滚动升级 / 冷启动时宿主
+   * 可能已经有一份在途，而此时我们还没发过 `complete`）。
+   */
+  const pendingLitNow = (currentId: string | undefined, draft: string): boolean => {
+    const tick = tickPending(localPending, {
+      now: Date.now(),
+      sessionId: currentId ?? null,
+      draft,
+      minVisibleMs: PENDING_MIN_VISIBLE_MS,
+      deadlineMs: PENDING_DEADLINE_MS,
+    });
+    if (localPending !== null && !tick.lit) {
+      // tick 判定的收口（过期 / 换会话 / 草稿不相干）在这里就地兑现：
+      // 不等下一个事件，否则会拖到下一次打字才熄。
+      localPending = null;
+    }
+    if (localPending !== null) return true;
+    // 兜底：宿主说在途（且属于当前会话）。宿主给的是"它那边真有请求在跑"，
+    // 比"我们自己发过但可能早已失败"更可信。
+    return settings.completionPending === true;
+  };
+
   /** 渲染幽灵 overlay。 */
   const render = (): void => {
     const currentId = currentSessionIdOf(sessions.list.getSnapshot());
@@ -1842,7 +1928,12 @@ function applyBody(ctx: Context): void {
     // 这里不新增任何 render 触发源：用的是已有的 settings（在途位 + 两个开关）与
     // 已有的 render 调用点。反过来也成立——`syncPendingStyle` 只写属性与一张样式表，
     // 不调 render、不碰幽灵缓存，所以不会像 #21 那样造出「写→推→render→再写」的回环。
-    overlay.syncPendingStyle(pendingStyleOf(settings), settings.completionPending === true);
+    // 判据：本地在途优先，宿主在途兜底（见 `pendingLitNow`）。draft 取自本帧快照，
+    // 与幽灵用同一份 —— 这样"灯说在等"和"幽灵按哪份草稿渲染"不会各说各话。
+    overlay.syncPendingStyle(
+      pendingStyleOf(settings),
+      pendingLitNow(currentId, bound === null ? '' : readDraftSnapshot(bound.input.state.getSnapshot()).draft),
+    );
     // 幽灵内容先于续写调度计算：调度策略需要「当前幽灵形态」作为入参（`inline`
     // 意味着这份草稿的续写已经显示在屏幕上，不必再问一次）。ghostContent() 是
     // 纯读取 + 结果缓存，挪到前面没有副作用，也让下面的分支复用同一份结果。
@@ -2241,6 +2332,9 @@ function applyBody(ctx: Context): void {
       }
       armState = settleInlineTimer(armState, { sessionId: armedSessionId, draft: draftNow });
 
+      // 点亮指示：**在写出的同一刻**，不等任何网络往返。这是 A 方案的全部要点 ——
+      // 实测宿主推来的在途位会在终点前才到，靠它驱动就是"闪一下"。
+      lightLocalPending(armedSessionId, draftNow);
       // `'complete'` 参与队列的「排队中 last-wins」：用户继续打字后，这条尚未发出的
       // 旧草稿会被下一条 complete 取代（兑现 false = 未发送，不是写失败）。
       void writeOps(
@@ -2574,6 +2668,21 @@ function applyBody(ctx: Context): void {
           hotCountsCache = null;
           ghostContentCache = null;
           settings = next;
+          // ── 熄灭（A 方案的收口侧）─────────────────────────────────
+          // 三种"这次生成已经结束"的信号，任一满足就熄：
+          //  ① 宿主给了续写（无论最终显不显示 —— 灯的任务是"它在生成"，
+          //     生成完了就该灭；出现与否由幽灵自己的判据负责）；
+          //  ② 宿主明确说不在途，且我们没有更新的本地在途；
+          //  ③ 本地在途已被 tick 判死（过期/换会话/草稿不相干）。
+          //
+          // `shouldFollowHostFalse` 的取舍：宿主说 `false` 时，只有在本地也空着才采信。
+          // 本地还亮着说明我们刚发过 `complete`，宿主的 `false` 很可能是上一个请求的
+          // 陈旧回声（`_push` 有合并窗口）——采信早了就是"发出去立刻被自己按灭"。
+          if (localPending !== null
+            && (next.completion !== null || shouldFollowHostFalse(localPending, next.completionPending))) {
+            localPending = null;
+            if (pendingFloorTimer !== null) { clearTimeout(pendingFloorTimer); pendingFloorTimer = null; }
+          }
           // 收到 host 新鲜数据后立即持久化，下次冷启动可立即恢复。
           saveToCache({
             hot: settings.hot,
