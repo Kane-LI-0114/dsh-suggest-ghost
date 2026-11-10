@@ -83,8 +83,8 @@ export const GHOST_FIELDS: ReadonlyArray<{
     key: 'boxGlowEnabled',
     label: { zh: '生成时输入框发光', en: 'Glow around the input box' },
     hint: {
-      zh: '生成期间让输入框边缘有一圈呼吸的微光，用来提示还在生成。默认打开。',
-      en: 'Pulse a soft glow around the input box while a suggestion is being generated. On by default.',
+      zh: '生成期间让输入框边缘有一圈呼吸的微光，用来提示还在生成。实验性功能，默认关闭。',
+      en: 'Pulse a soft glow around the input box while a suggestion is being generated. Experimental, off by default.',
     },
     kind: 'boolean',
     section: 'display',
@@ -94,8 +94,8 @@ export const GHOST_FIELDS: ReadonlyArray<{
     key: 'caretGlowEnabled',
     label: { zh: '生成时光标呼吸', en: 'Pulse the text cursor' },
     hint: {
-      zh: '生成期间让输入光标在两种颜色之间缓慢变化。默认关闭。',
-      en: 'Slowly shift the text cursor between two colors while generating. Off by default.',
+      zh: '生成期间让输入光标在两种颜色之间缓慢变化。实验性功能，默认关闭。',
+      en: 'Slowly shift the text cursor between two colors while generating. Experimental, off by default.',
     },
     kind: 'boolean',
     section: 'display',
@@ -473,6 +473,9 @@ const zhStrings = {
   /** 显示设置 section（仅详情页显示） */
   sectionDisplay: '显示设置',
   sectionPending: '生成中的提示',
+  /** 实验性徽章（与 dsh-later 的「高级语法」同一口径：默认关 + 标题挂徽章）。 */
+  betaBadge: '实验性',
+  betaBadgeAria: '实验性功能，行为可能随版本调整',
   showInSettings: '在设置中显示',
   showInSettingsHint: '在设置对话框中显示本插件的设置页（刷新页面后生效）',
   /** 分组标题 */
@@ -516,6 +519,8 @@ const enStrings: { [K in keyof typeof zhStrings]: (typeof zhStrings)[K] } = {
   configOnly: 'Strategy field: not writable from the UI — edit cordis.patch.yml',
   sectionDisplay: 'Display',
   sectionPending: 'While generating',
+  betaBadge: 'Beta',
+  betaBadgeAria: 'Beta feature; behaviour may change between versions',
   showInSettings: 'Show in settings',
   showInSettingsHint: 'Show this plugin\'s settings page in the settings dialog (refresh to take effect)',
   sectionLlm: 'LLM next suggestion',
@@ -1267,7 +1272,12 @@ export function SuggestGhostCard({ scope, locale, surface, modelCatalog, modelCa
         <div className={SECTION_LAYOUT.inline === 'grid' ? 'sgc-section-fields sgc-section-fieldsGrid' : 'sgc-section-fields'}>{renderFieldRun(inlineFields)}</div>
       </section>
       <section className="sgc-section" aria-labelledby="sgc-section-pending">
-        <h3 className="sgc-section-heading" id="sgc-section-pending">{t.sectionPending}</h3>
+        <h3 className="sgc-section-heading" id="sgc-section-pending">
+          {t.sectionPending}
+          {/* 实验性徽章：与 dsh-later 的「高级语法」同一形态（标题后一个胶囊），
+              aria-label 说明"行为可能随版本调整"，不让读屏用户只听到一个孤立的词。 */}
+          <span className="sgc-beta" aria-label={t.betaBadgeAria}>{t.betaBadge}</span>
+        </h3>
         <div className={SECTION_LAYOUT.display === 'grid' ? 'sgc-section-fields sgc-section-fieldsGrid' : 'sgc-section-fields'}>{renderFieldRun(pendingFields)}</div>
       </section>
       <section className="sgc-section" aria-labelledby="sgc-section-language">

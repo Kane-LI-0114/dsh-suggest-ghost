@@ -55,7 +55,23 @@
 /** 判定的三种结果。`ok` 为 true 时给出对齐后的幽灵后缀。 */
 export type CompletionAlignResult =
   | { readonly ok: true; readonly kind: 'exact' | 'extended'; readonly suffix: string; readonly full: string }
-  | { readonly ok: false; readonly reason: 'draft-mismatch' | 'empty-text' | 'empty-draft' };
+  | { readonly ok: false; readonly reason: CompletionAlignMiss };
+
+/**
+ * 不能对齐的四种理由。
+ *
+ * `payload-superseded` 与 `draft-mismatch` **都不显示**，分档只为两件事：
+ *  1. 留痕能把「这一代作废」和「草稿被改坏了」分开——两者现场同形，排查方向相反；
+ *  2. 调用方的收口动作不同：见 {@link decideCompletionReuse}。
+ *
+ * ## 为什么要分档（实测形态 `draftChars=1 payloadDraftChars=15`）
+ *
+ * 用户停顿时客户端发出 `complete(草稿A)`；生成期间（实测中位数秒）用户把草稿往回删，
+ * 于是宿主机回来的是**按草稿A 生成**的续写。此时 `cur` 是 `payloadDraft` 的真前缀。
+ * 对齐判据丢弃它是对的（删字后光标位置未知，贴上去会错位），但这不是「草稿被改坏」，
+ * 而是「这一轮的结果来晚了、用户已经换了题意」——**这一代作废，等下一轮**。
+ */
+export type CompletionAlignMiss = 'draft-mismatch' | 'payload-superseded' | 'empty-text' | 'empty-draft';
 
 /** 两串按 UTF-16 码元的公共前缀长度。 */
 function commonPrefixLength(a: string, b: string): number {
@@ -84,7 +100,15 @@ export function alignCompletion(
     return { ok: true, kind: 'exact', suffix: completionText, full: cur + completionText };
   }
   // 只在「你在末尾继续打字」时显示；其余（改中间/换内容/删字）一律丢弃。
-  if (!cur.startsWith(payloadDraft)) return { ok: false, reason: 'draft-mismatch' };
+  if (!cur.startsWith(payloadDraft)) {
+    // 「删字」与「草稿被改坏」是两回事：前者是这一代续写的题目已经被用户撤回
+    // （`cur` 是 `payloadDraft` 的真前缀），后者是内容不再相关。两者的处理都是丢弃，
+    // 但理由必须分开——留痕靠它，排查方向靠它。
+    //
+    // 为什么仍然**不显示**：删字后光标落在哪里无从得知，把按旧草稿生成的续写接在
+    // 现在这行字后面可能落在错误的位置。宁可少显示，不可显错（与上面同一取向）。
+    return { ok: false, reason: payloadDraft.startsWith(cur) ? 'payload-superseded' : 'draft-mismatch' };
+  }
 
   // 你新打的那一段（可能已与续写开头重合）。
   const typedSince = cur.slice(payloadDraft.length);
@@ -143,6 +167,7 @@ export type InlineFrameState =
         | 'other-session'
         | 'no-text'
         | 'draft-mismatch'
+        | 'payload-superseded'
         | 'empty-draft-after-align';
     };
 
@@ -159,7 +184,7 @@ export type InlineFrameInput = {
   /** `alignCompletion(...)` 的 `ok`；未对齐（载荷不属于本会话）时为 false。 */
   readonly alignedOk: boolean;
   /** `alignCompletion(...)` 的失败理由；`ok` 时为 null。 */
-  readonly alignedReason: 'draft-mismatch' | 'empty-text' | 'empty-draft' | null;
+  readonly alignedReason: CompletionAlignMiss | null;
 };
 
 /**
@@ -189,6 +214,8 @@ export function classifyInlineFrame(input: InlineFrameInput): InlineFrameState {
       : { kind: 'superseded', reason: 'draft-mismatch' };
   }
   if (input.alignedReason === 'empty-draft') return { kind: 'superseded', reason: 'empty-draft-after-align' };
+  // 这一代的题目已经被用户撤回（往回删了字）：作废，但理由要与「草稿被改坏」分开。
+  if (input.alignedReason === 'payload-superseded') return { kind: 'superseded', reason: 'payload-superseded' };
   return { kind: 'superseded', reason: 'draft-mismatch' };
 }
 
@@ -287,4 +314,85 @@ export function decideLlmForm(input: LlmFormInput): LlmFormVerdict {
   return hasUserDraft(input.draft)
     ? { allow: false, reason: 'draft-not-blank' }
     : { allow: true, reason: 'blank-draft' };
+}
+
+// ── 续写这一路的整帧裁决：算不算对齐、扣不扣后续形态 ───────────────────────────
+//
+// ## 要闭合的现象（实测，确定性序列而非竞态）
+//
+// ```
+// 0.5s  停顿触发 → 客户端写出 complete(草稿A)，灯亮
+// 0.8s  用户把草稿往回删（实测退到 1 字）→ 灯判「草稿不再拥有这次生成」熄灭
+// 4.5s  宿主按草稿A 生成完毕，推回 completion(草稿A, 续写)
+// ⇒     对齐判据丢弃它，这一帧什么都不显示，而且没有下一轮
+// ```
+//
+// 用户看到的是「灯亮过，但没有字」。三件事各自的取舍：
+//
+//  1. **丢弃是对的**：删字后光标位置无从得知，按旧草稿生成的续写贴上去会错位；
+//  2. **灯熄灭是对的**：它表达的是「我发出去了、在等」，等的那一轮已经作废；
+//  3. **这一帧不该把形态扣住**：`consumed`（同代裁空）是因为"你还在这一代里，只是已经
+//     打完了"，而这里这一代已经不作数了 —— 历史补全应当自然回来，用户至少有东西可看。
+//
+// ## 为什么不在这里销毁载荷
+//
+// 载荷**没有任何代次标识**（`settings.ts` 的 `completion` 只有 `draft`/`text`/`final`，
+// 推出去时 `final` 恒为 true；`completionFrame` 是客户端从 `final` 推出来的常量，不是
+// 计数器；`complete` op 的 `rev` 恒 0）。而 `_push` 有指纹判重、`pull` 应答又会把宿主
+// 缓存里那份续写**原样再推一遍** —— 客户端若把 `settings.completion` 清掉，下一份同指纹
+// 的推送会被判重跳过，载荷就**永久消失且不自愈**。
+//
+// 所以本判据只回答「这一帧算不算、扣不扣」，**不动载荷**。失效的那一代自然被后续的新
+// 推送替换；在它被替换之前，每帧重新对齐的代价是一次字符串前缀比较（微秒级），不构成
+// 性能问题，也不需要自造一份"已失效指纹"的旁路状态（那会与真实载荷互相不约束）。
+
+/** {@link decideCompletionReuse} 的入参。 */
+export type CompletionReuseInput = {
+  /** 停顿续写开关。 */
+  readonly inlineEnabled: boolean;
+  /** 这一帧的草稿（与渲染、采纳同源于同一次快照读取）。 */
+  readonly draft: string;
+  /** host 推来的续写载荷（`settings.completion`）。 */
+  readonly payload: { readonly draft: string; readonly text: string } | null | undefined;
+  /** 载荷是否属于当前会话。 */
+  readonly payloadBelongsToCurrentSession: boolean;
+  /** `alignCompletion(...)` 的结果；载荷不属于本会话（没算）时为 null。 */
+  readonly aligned: CompletionAlignResult | null;
+};
+
+/** 续写这一路的本帧裁决。 */
+export type CompletionReuseVerdict = {
+  /** 本帧是否显示续写。 */
+  readonly show: boolean;
+  /** 本帧是否**扣住**历史补全（同一次生成内形态不得翻转，#38 第 4 条）。 */
+  readonly holdHistory: boolean;
+  /** 留痕用：`aligned` / `consumed` / `inactive` / 以及 {@link CompletionAlignMiss} 的取值。 */
+  readonly reason: 'aligned' | 'consumed' | 'inactive' | CompletionAlignMiss;
+};
+
+/**
+ * 续写这一路的整帧裁决。与 {@link decideInlineForm} 结论一致，只是入参换成一次对齐结果，
+ * 让"算没算过对齐"与"算完怎么处置"共用同一份入参形状。
+ *
+ * 只有 `consumed` 扣住历史：那是「同一次生成仍在场、只是整段续写都已经被你打完」。
+ * 作废 / 改坏 / 换会话 / 开关关闭 / 载荷未到，一律放历史补全回去——
+ * 这些形态下续写这一路都没有"正在显示的形态"可保护。
+ */
+export function decideCompletionReuse(input: CompletionReuseInput): CompletionReuseVerdict {
+  const verdict = decideInlineForm({
+    inlineEnabled: input.inlineEnabled,
+    draft: input.draft,
+    payload: input.payload,
+    payloadBelongsToCurrentSession: input.payloadBelongsToCurrentSession,
+    alignedOk: input.aligned !== null && input.aligned.ok,
+    alignedReason: input.aligned === null || input.aligned.ok ? null : input.aligned.reason,
+  });
+  if (verdict.showInline) return { show: true, holdHistory: false, reason: 'aligned' };
+  if (verdict.hold !== null) return { show: false, holdHistory: true, reason: 'consumed' };
+  const reason = input.aligned === null
+    ? 'inactive'
+    : input.aligned.ok
+      ? 'aligned'
+      : input.aligned.reason;
+  return { show: false, holdHistory: false, reason };
 }
