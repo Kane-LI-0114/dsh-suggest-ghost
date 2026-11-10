@@ -50,7 +50,7 @@ import {
   type FrameHint,
   type FrameLedger,
 } from './accept-guard.js';
-import { alignCompletion, decideInlineForm, decideLlmForm, hasUserDraft } from './completion-align.js';
+import { alignCompletion, decideCompletionReuse, decideLlmForm, hasUserDraft } from './completion-align.js';
 import { buildOpsPayload, createSeqSource } from './ops-envelope.js';
 import { nextAcceptChunk } from './chunk.js';
 import {
@@ -1680,11 +1680,18 @@ function applyBody(ctx: Context): void {
           // 「幽灵为什么不出」的**第一诊断行**，且天然低频——只在理由**变化**时打一条
           // （`lastCompletionSkip` 闸），不是 push-cell 那种事件节奏刷屏。常态证据降
           // Verbose、诊断主行留 warn，两类的边界以「用户来报障时先看哪行」为准。
+          // `draftIsOldPrefix`：当前草稿是否只是载荷草稿的**前缀**（用户把字往回删了）。
+          // 现场 `reason=draft-mismatch draftChars=1 payloadDraftChars=15` 与「真正改坏了
+          // 草稿」在旧输出里同形，人被引向「对齐判据太严」；这一位让两种情况一眼可分
+          // （`=true` ⇒ 这一代作废，等下一轮；`=false` ⇒ 草稿被改坏，去查输入侧）。
+          // 只放一个布尔量，不含正文（与宿主侧同款隐私约束）。
           const sink = console.warn;
           sink(
             `[dsh-suggest-ghost][ops-trace] completion not shown: reason=${skipReason}`
             + ` draftChars=${draft.length} payloadDraftChars=${completion?.draft?.length ?? -1}`
             + ` completionChars=${completion?.text?.length ?? -1}`
+            + ` draftIsOldPrefix=${String(completion !== null && completion !== undefined
+              && completion.draft.startsWith(draft))}`
             + ` payloadSessionMatches=${String(settings.completionSessionId === currentId)}`,
           );
         }
@@ -1700,17 +1707,19 @@ function applyBody(ctx: Context): void {
       // 是「灰色尾巴无声换成另一段不相干的文字」。判据见 completion-align.ts 末段 `decideInlineForm`：它靠
       // `alignCompletion` 的归属前缀关系（#33 的「边打边等」主路径因此不受影响），
       // 不靠草稿逐字相同。
-      const form = decideInlineForm({
+      // 入参就是**上面那一次对齐结果**（`aligned`）：早先这里把 `alignedOk` 写死成 false 再
+      // 重传理由，显示判定与形态判定实际上是两份拼起来的证据。现在整帧裁决只有一处
+      // （`decideCompletionReuse`），它内部复用同一个 `decideInlineForm`。
+      const form = decideCompletionReuse({
         inlineEnabled: settings.inlineEnabled,
         draft,
         payload: completion,
         payloadBelongsToCurrentSession: settings.completionSessionId !== null
           && settings.completionSessionId === currentId,
-        alignedOk: false, // 上面已就地的 `aligned.ok` 分支返回，能走到这里必然没显示成
-        alignedReason: aligned === null || aligned.ok ? null : aligned.reason,
+        aligned,
       });
-      if (form.hold !== null) {
-        traceOnce('form-hold', form.hold,
+      if (form.holdHistory) {
+        traceOnce('form-hold', 'inline-consumed',
           ` draftChars=${draft.length} payloadDraftChars=${completion?.draft?.length ?? -1}`
           + ` completionChars=${completion?.text?.length ?? -1} wouldBe=history`
           + ` ${frameHintFields(settings.completionFrame)}`);
