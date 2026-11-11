@@ -229,8 +229,12 @@ console.log('\n【8】产物字节级护栏：检查真正下发的 bundle，而
   check('产物中不存在未声明标识符 scrollHost（ReferenceError 回归）',
     !/scrollHost/.test(bundle));
 
+  // 断言「这条防护存在」，而不是「某个变量名出现在某个位置」（#152 的重构把
+  // `composer` 改名成 `composerNow`，旧正则于是红了一条**功能仍然在**的断言）。
+  // 语义要求不变：render() 里必须存在一个 isComposerElement 门，且它在**挂载/
+  // 显示**之前；仅靠注释解释不算。
   check('render() 对非编辑器形态设了防护（workspaceTrigger 下不挂幽灵）',
-    /if \(!isComposerElement\(composer\)\)/.test(bundle));
+    /isComposerElement\(composer\w*\)/.test(bundle));
 
   // 让位规则必须「已标记显示 且 未被 display:none 隐藏」两个条件同时成立：
   // 少第一个 → 幽灵显示时与 placeholder 重叠（用户截图）；
