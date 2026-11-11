@@ -774,9 +774,39 @@ class GhostOverlay {
     return this.composer;
   }
 
-  /** 绑定到当前输入框（若变化则重建对齐）。 */
+  /**
+   * 把 overlay 节点挂到当前 composer 的父节点（`.grow`）里。
+   *
+   * ## 为什么需要这一层（#152）
+   *
+   * 节点与「绑定」是两件事，旧实现把它们绑死在同一处：`el` 只在 `attach()`
+   * 里 append。于是只要节点被别人摘走（宿主重建 `.grow` 的子节点、HMR 热替换、
+   * 别的插件动了那棵子树），而 composer 引用没变，就再没有任何路径会把节点放回去。
+   *
+   * 本方法只负责「节点在场」，**不碰**显示状态：`display` / `data-shown` 仍由
+   * 显示路径独占（见 `alignAndVerify` 的两条顺序约束）。因此调用它不会让 placeholder
+   * 让位——让位规则要求 `data-shown="1"` **且** overlay 未被 `display:none` 隐藏，
+   * 两个条件都不由本方法改动。
+   *
+   * @returns 挂好之后节点是否真的在文档里。
+   */
+  ensureMounted(): boolean {
+    const parent = this.composer?.parentElement ?? null;
+    if (parent !== null && (this.el.parentElement !== parent || !this.el.isConnected)) {
+      parent.appendChild(this.el);
+    }
+    return this.el.isConnected;
+  }
+
+  /**
+   * 绑定到当前输入框（若变化则重建对齐）。
+   *
+   * 短路条件里**必须带 `this.el.isConnected`**：只看 composer 引用的话，引用没变
+   * 而节点已被摘走时这里会直接 return，`appendChild` 永远不执行 ⇒ 节点再也回不来。
+   * 这类「不入死」由 §自愈 保证：每一次需要用到节点的地方都先走 `ensureMounted()`。
+   */
   private attach(composer: HTMLElement): void {
-    if (this.composer === composer) return;
+    if (this.composer === composer && this.el.isConnected) return;
     this.detach();
     this.composer = composer;
     // 滚动容器：只为挂 scroll 监听（定位不用它，见类注释的实测表格）。
@@ -1224,6 +1254,12 @@ class GhostOverlay {
     const box = style.boxGlow === true;
     // 不在途时两个属性一起摘掉：它们表达的是"此刻正在生成"，与开关无关。
     const live = pending === true;
+    // 先保证节点在 DOM 里再写属性（#152）。属性写在游离节点上零可观测：
+    // `body:has(#…[data-caret-glow="1"])` 永远不命中，用户什么也看不到。
+    // 自愈写在这里、而不是只靠调用方先调 `ensureMounted()`：`syncPendingStyle`
+    // 是这两个属性的唯一写入方，它必须自己保证写入目标可被观测——否则任何绕过
+    // `render()` 的新调用方都会静默复现同一个问题。
+    if ((caret || box) && live) this.ensureMounted();
     if (caret && live) this.el.dataset.caretGlow = '1'; else delete this.el.dataset.caretGlow;
     if (box && live) this.el.dataset.boxGlow = '1'; else delete this.el.dataset.boxGlow;
 
@@ -1931,6 +1967,32 @@ function applyBody(ctx: Context): void {
   const render = (): void => {
     const currentId = currentSessionIdOf(sessions.list.getSnapshot());
     resolve(currentId);
+    // ── 先把这个插件绑定到 composer，再写指示状态（#152）─────────────────────
+    // 指示状态（`data-caret-glow` / `data-box-glow`）写在 overlay 自己的节点上，而
+    // 该节点只有在知道 composer 之后才有挂载点（`.grow`）。旧顺序是「先写属性、
+    // 后面才 attach」，冷启动那一帧节点还游离在内存里 ⇒ 属性写在没人能查到的节点上。
+    // 这里只做**绑定 + 挂载**，不碰 display / data-shown，所以不会提前让位 placeholder
+    // （让位规则要求 `data-shown="1"` 且非 `display:none`，两者都由显示路径独占）。
+    //
+    // 复用已绑定的输入框；仅当缓存失效（React 重建/首次）时才查询 DOM。
+    // 双代选择器：textarea（≤0.1.1）或 contenteditable（0.1.2 Lexical）。
+    const attachedNow = overlay.currentTextarea;
+    const composerNow = attachedNow !== null && attachedNow.isConnected
+      ? attachedNow
+      : cachedComposer !== null && cachedComposer.isConnected
+        ? cachedComposer
+        : document.querySelector<HTMLElement>(COMPOSER_SELECTOR);
+    if (composerNow !== null) {
+      // 非编辑器形态不挂载：宿主在无工作区时会把 composer 换成「选择一个工作区开始」
+      // 这类触发器按钮，那种形态上不该出现任何插件节点（理由见下方长注释）。
+      if (composerNow === validatedComposer || isComposerElement(composerNow)) {
+        validatedComposer = composerNow;
+        cachedComposer = composerNow;
+        // attach() 幂等：绑定 + 挂载（含"节点被摘走后重新 append"的自愈）。
+        overlay.attach(composerNow);
+        overlay.ensureMounted();
+      }
+    }
     // 生成中指示：**在一切早退之前**同步（这一帧可能根本没有幽灵内容——恰恰是在途
     // 期间没有幽灵，它才必须在这里）。
     //
@@ -1963,15 +2025,8 @@ function applyBody(ctx: Context): void {
     // key 与 content 同步计算：content 非 null 时 key 必非 null。
     if (key === null) return;
     if (shown !== null && shown.key === key) return; // 无变化
-    // 复用已绑定的输入框；仅当缓存失效（React 重建/首次）时才查询 DOM。
-    // 双代选择器：textarea（≤0.1.1）或 contenteditable（0.1.2 Lexical）。
-    const attached = overlay.currentTextarea;
-    let composer = attached !== null && attached.isConnected
-      ? attached
-      : cachedComposer !== null && cachedComposer.isConnected
-        ? cachedComposer
-        : document.querySelector<HTMLElement>(COMPOSER_SELECTOR);
-    if (composer === null) return; // 输入框尚未挂载，等待下次通知
+    // 输入框在帧首已经解析过（见 `composerNow`）；这里直接用同一份，不重复查询。
+    if (composerNow === null) return; // 输入框尚未挂载，等待下次通知
     // ── 非编辑器形态一律不出幽灵 ────────────────────────────────────────────
     // 宿主在无工作区/会话不可写时会把 composer 换成「选择一个工作区开始」这类
     // **触发器按钮**：源码里 `editor: workspaceTrigger ? null : editor`，编辑器
@@ -1982,22 +2037,19 @@ function applyBody(ctx: Context): void {
     // 复用事件路径已有的 `isComposerElement` 判据（textarea 或 isContentEditable），
     // 两条路径对「什么算输入框」的定义必须一致，否则又会出现「事件侧不认、渲染侧
     // 却挂」的错配。
-    // 如果 composer 与上次验证通过的相同，跳过 isComposerElement 检查
-    // （DOM 属性读取：closest/matches/isContentEditable）。
-    if (composer !== validatedComposer) {
-      if (!isComposerElement(composer)) {
-        // 已经显示中的要收掉，并把指纹清空，否则回到可编辑形态时会被
-        // 「key 未变化」早退挡住，幽灵再也不出现。
-        if (shown !== null) {
-          overlay.hide();
-          shown = null;
-        }
-        return;
+    // 帧首已经做过同一条判定并把结果记在 validatedComposer 上，这里只判"是否通过"。
+    if (composerNow !== validatedComposer) {
+      // 已经显示中的要收掉，并把指纹清空，否则回到可编辑形态时会被
+      // 「key 未变化」早退挡住，幽灵再也不出现。
+      if (shown !== null) {
+        overlay.hide();
+        shown = null;
       }
-      validatedComposer = composer;
+      return;
     }
-    cachedComposer = composer;
-    overlay.attach(composer);
+    // 再挂一次（幂等）：本帧前半段可能已挂好，这里保证"显示"路径自身不依赖调用
+    // 顺序——它是不自愈问题的最终兜底。attach() 内部短路已带 isConnected。
+    overlay.attach(composerNow);
     overlay.show(content);
     shown = { key, content, base };
   };

@@ -6,6 +6,24 @@ All notable changes to this project will be documented in this file.
 
 ### 修复
 
+- **overlay 节点被摘走后不会自愈，且指示钩子挂在「只在需要显示时才存在」的节点上**（#152）。
+  `GhostOverlay.attach()` 过去用 **composer 引用**做短路（`if (this.composer === composer) return;`），
+  于是只要节点被摘走（宿主重建 `.grow` 的子节点、HMR、别的插件动了那棵子树）而 composer 引用未变，
+  `appendChild` 就永不执行，**节点再也回不来**——实测摘掉后连续真实键盘输入，`exists` 恒为 false。
+  同时 `syncPendingStyle()` 写的是 `this.el.dataset`，而 `el` 只在 `attach()` 里挂载，
+  游离节点上的写入**零可观测**（`body:has()` 规则永不命中）⇒ 冷启动期间即使开了指示开关也不会亮。
+  修法：① `attach()` 的短路加上 `this.el.isConnected`；② 新增 `ensureMounted()` 并在 `render()`
+  帧首调用，把「挂载」与「显示」解耦——节点常驻但 `display:none`、`data-shown` 保持 `0`，
+  让位规则要求的两条都不满足，**不会误伤 placeholder**（真 GUI 实测：`overlayDisplay:none`、
+  `placeholderDisplay:block`）；③ `syncPendingStyle()` 写入前自己调 `ensureMounted()`
+  （自愈写在唯一写入方，而不是把责任丢给每个调用方）。
+  边界如实记：**摘节点是人为构造的复现**，宿主在什么真实操作下会「保 composer 引用但换掉 `.grow` 内容」
+  未定位；修的是「一旦发生就永不自愈」这个性质，不是修某个已知触发路径。
+- **`regen-pending-smoke` 从源码正则升级成真跑 DOM**（同 #152）。它原先只做 `assert.match(bundle, …)`
+  （`:81-83`），从不运行 DOM ⇒ 「指示钩子挂在哪」这一维度**从未被覆盖**，正是 CONTRIBUTING 警告的
+  「形状断言不配行为对照」。另把 `ghost-geom-smoke` 里一条绑定变量名的断言（`isComposerElement(composer)`）
+  改成不绑定变量名——#152 的重构把 `composer` 改名成 `composerNow`，旧正则红了一条**功能仍在**的断言。
+
 - **engines.dsh 与 peerDependencies 匹配 0.2.2-rc.1（Gitea #149）**：内核 0.2.2-rc.1 于 2026-11-04 发布并转正 `latest`，
   代码已按 #121 完成 0.2.2 契约适配（0.9.0），但声明面把新内核整个挡在门外——`engines.dsh` 旧范围 `>=0.2.0-rc.2 <0.3.0-0`
   在 node-semver 默认规则下匹配不到 `0.2.2-rc.1`（tuple `[0,2,2]` 上没有预发布限定符），导致插件被硬 skip。
