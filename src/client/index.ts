@@ -161,7 +161,7 @@ let officialCatalogLoader: (() => void) | null = null;
 let officialCatalogListener: (() => void) | null = null;
 import type { PluginSettingsScope } from './settings-scope.js';
 import type { LocaleFaceLike } from './useGhostT.js';
-import { KeyHintNode } from './key-hint.js';
+import { KeyHintBarSlot, type KeyHintInput } from './key-hint-bar.js';
 
 /**
  * 宿主可观察快照的最小结构视图。不从 @deepseek-ai/dsh-client-runtime 导入：
@@ -1353,7 +1353,29 @@ function applyBody(ctx: Context): void {
   // 就地快捷键提示（#157）：**独立节点**，不是 overlay 的子节点 —— overlay 写死
   // `pointer-events:none` 且 `align()` 把宽度收窄成「行尾到行末」，挂进去既不可交互
   // 也会折行；`llm` 形态还没有行尾锚点。详见 key-hint.ts 模块注释。
-  const keyHint = new KeyHintNode();
+  /**
+   * 键位提示的**当前值**（Gitea #157，槽位版）。
+   *
+   * 从手写节点改成槽位后，这里不再持有 DOM，只持有一个可被 React 组件读到的值：
+   *  - `keyHintNow()` 给槽位组件一份快照（每次渲染重算，天然是最新设置）；
+   *  - `keyHintWatcher` 让「幽灵出现/消失」能主动触发一次槽位重渲染（否则组件不会自己更新）。
+   * 位置由宿主 `composerStack` 的 flex 布局决定，**不再有任何几何计算**，
+   * 这也是它不可能再压到正文的原因（见 key-hint-bar.ts 模块注释）。
+   */
+  let keyHintValue: KeyHintInput | null = null;
+  let keyHintWatcher: (() => void) | null = null;
+  /** 设置当前提示并通知槽位重渲染（值未变则什么都不做，避免无谓渲染）。 */
+  const setKeyHint = (next: KeyHintInput | null): void => {
+    const same = (keyHintValue === null && next === null)
+      || (keyHintValue !== null && next !== null
+        && keyHintValue.kind === next.kind && keyHintValue.acceptKey === next.acceptKey
+        && keyHintValue.regenKey === next.regenKey && keyHintValue.wordAccept === next.wordAccept
+        && keyHintValue.regenEnabled === next.regenEnabled && keyHintValue.lang === next.lang);
+    if (same) return;
+    keyHintValue = next;
+    keyHintWatcher?.();
+  };
+  const keyHintNow = (): KeyHintInput | null => keyHintValue;
   /**
    * 当前界面语言（提示行文案用）。
    *
@@ -2027,6 +2049,16 @@ function applyBody(ctx: Context): void {
     // 意味着这份草稿的续写已经显示在屏幕上，不必再问一次）。ghostContent() 是
     // 纯读取 + 结果缓存，挪到前面没有副作用，也让下面的分支复用同一份结果。
     const { content, key, base } = ghostContent(currentId);
+    // ── #157 修复：提示行必须**每帧先清**，不能只在"幽灵消失"那一条分支里清 ──
+    //
+    // 实测 bug（用户截图）：草稿为空、幽灵不在屏上，提示行却还挂着。
+    // 根因是清空散落在各条早退分支里，而它们都带 `if (shown !== null)` 守卫 ——
+    // 只要某帧 `shown` 恰好是 null（或已经被别的路径置空），那些 `return` 就
+    // **直接跳过清空**，提示行留在 DOM 里再也没人管。
+    //
+    // 修法：把「本帧没有提示」当默认值，每帧无条件写一次；只有下面确认
+    // 「幽灵真的画出来了」才重新设值。这样任何早退路径都不会漏清，且因为
+    // `setKeyHint` 内部值相等就不通知，多写这一次**不产生额外渲染**。
     // 停顿续写调度：判据是「草稿/会话/形态/配置有没有变」，不是 render 次数
     // （debounce 语义见 scheduleInlineTrigger 与 inline-arm-policy.ts）。
     scheduleInlineTrigger(currentId, content === null ? null : content.kind);
@@ -2036,8 +2068,6 @@ function applyBody(ctx: Context): void {
     if (content === null || base === null) {
       if (shown !== null) {
         overlay.hide();
-        keyHint.hide();
-        keyHint.hide();
         shown = null;
       }
       return;
@@ -2063,12 +2093,19 @@ function applyBody(ctx: Context): void {
       // 「key 未变化」早退挡住，幽灵再也不出现。
       if (shown !== null) {
         overlay.hide();
-        keyHint.hide();
-        keyHint.hide();
         shown = null;
       }
       return;
     }
+    // ── #157 修复：走到这里说明**本帧确实有一条幽灵要画**，先把上一帧的提示清掉，
+    // 再在下面按 `isPainted` 决定要不要重设。位置选在这里而不是帧首，是因为帧首
+    // 之后还有四条早退（content/base 为空、key 为空、无变化、输入框缺失/形态不符），
+    // 它们各自 `return` 时**根本不会走到显示逻辑** —— 提示行会留在 DOM 里没人管
+    // （用户实测：草稿空、无幽灵，提示行还挂着）。
+    //
+    // 放在这四条早退**之后**、唯一的显示点之前，既保证"没有幽灵就没提示"，
+    // 又不会像"帧首清空 + 后面重设"那样把自己刚设的值清掉（那一版实测提示行完全不渲染）。
+    setKeyHint(null);
     // 再挂一次（幂等）：本帧前半段可能已挂好，这里保证"显示"路径自身不依赖调用
     // 顺序——它是不自愈问题的最终兜底。attach() 内部短路已带 isConnected。
     overlay.attach(composerNow);
@@ -2078,19 +2115,16 @@ function applyBody(ctx: Context): void {
     // 判据 `overlay.isPainted` 与 ghost 的绘制闸同源 —— 自检不合格时幽灵不画，
     // 提示行也不许单独留在那里说明一个不存在的建议。
     if (overlay.isPainted && settings.showKeyHint) {
-      keyHint.show(
-        {
-          kind: content.kind,
-          acceptKey: content.kind === 'llm' ? content.acceptKey : DEFAULT_ACCEPT_KEY,
-          regenKey: settings.regenKey,
-          wordAccept: settings.wordAccept,
-          regenEnabled: settings.regenEnabled,
-          lang: activeLang(),
-        },
-        composerNow,
-      );
+      setKeyHint({
+        kind: content.kind,
+        acceptKey: content.kind === 'llm' ? content.acceptKey : DEFAULT_ACCEPT_KEY,
+        regenKey: settings.regenKey,
+        wordAccept: settings.wordAccept,
+        regenEnabled: settings.regenEnabled,
+        lang: activeLang(),
+      });
     } else {
-      keyHint.hide();
+      setKeyHint(null);
     }
     shown = { key, content, base };
   };
@@ -2941,7 +2975,7 @@ function applyBody(ctx: Context): void {
         }
       }
       overlay.hide();
-      keyHint.hide();
+      setKeyHint(null);
       shown = null;
       return;
     }
@@ -2993,7 +3027,7 @@ function applyBody(ctx: Context): void {
             + ` baseDraftChars=${base.draft.length} baseRev=${String(base.rev)}`
             + ` ${frameHintFields(content.frame)}`);
           overlay.hide();
-          keyHint.hide();
+          setKeyHint(null);
           shown = null;
           return;
         }
@@ -3001,8 +3035,7 @@ function applyBody(ctx: Context): void {
       }
       if (wordAcceptSettled(content, accepted)) {
         overlay.hide();
-        keyHint.hide();
-        keyHint.hide();
+        setKeyHint(null);
         shown = null;
       }
     }
@@ -3196,6 +3229,52 @@ function applyBody(ctx: Context): void {
 
   // 设置对话框中的设置页：默认不显示，由插件详情页的开关控制。
   // 开关状态存储在 localStorage 中，key 为 'dsh-suggest-ghost:show-settings-section'。
+  // ── 键位提示的槽位注册（Gitea #157）──
+  //
+  // **必须在下面那些早退之前**：它们只和设置卡片有关，而提示行是无条件要显示的。
+  //
+  // ## 为什么是 `conversation.input.overlay` 而不是 `conversation.input.dock`
+  //
+  // 先试过 `dock`（宿主自己的 QueueDock / TodoDock 也在那里），实测定性不对：
+  //  - `dock` 是 `composerStack` 里的**真实 flex 子项**，会给提示行一个独立行位；
+  //  - 但它原本的语义是「**任务状态区**」（待办清单、排队消息），用户看到的效果是
+  //    「排队消息旁边多了一行没人认领的灰字」，而且宽屏下还要自己算宽度才能与卡片对齐。
+  //
+  // `overlay` 则天然合适，宿主源码里它是：
+  //
+  //     <div className={overlayAnchor} data-composer-overlay>
+  //       {renderSlot("conversation.input.overlay", {})}
+  //     </div>
+  //
+  // 而 `.overlayAnchor{position:absolute;inset:0 0 auto;height:0}` —— **零高度的
+  // 绝对定位锚点**，挂在输入卡片顶部、不参与布局:
+  //  - 不占垂直空间（不是 flex 子项，`gap` 也不会为它留位）；
+  //  - 横向自动卡片的宽度（父级就是卡片），不需要自己算 --dsh-composer-card-max-width；
+  //  - 不与对话正文相交（它在卡片边界内）。
+  //
+  // 唯一的活是**纵向**：锚点高度为 0，提示行要往上提一行，才不会压在卡片第一行草稿上。
+  // 这由组件自己的 `position:absolute; bottom:100%` 完成 —— 一行 CSS，不是几何计算。
+  if ((ctx as any).slots !== undefined) {
+    const disposeKeyHint = (ctx as any).slots.inject('conversation.input.overlay', () =>
+      (ctx as any).slots.register({
+        name: 'conversation.input.overlay',
+        id: 'suggest-ghost-keyhint',
+        // 参考实现（dsh-input-assist）在同一槽位用 200；取相近量级，
+        // 保证排在别人的输入区浮层之后/之前有可调余量。
+        order: 200,
+        // 组件只读这一个 thunk；`subscribe` 让「幽灵出现/消失」能推动重渲染。
+        inject: () => ({
+          keyHintNow,
+          subscribe: (fn: () => void) => {
+            keyHintWatcher = fn;
+            return () => { if (keyHintWatcher === fn) keyHintWatcher = null; };
+          },
+        }),
+      }, KeyHintBarSlot),
+    );
+    ctx.effect(() => disposeKeyHint, 'dsh-suggest-ghost: input overlay key hint');
+  }
+
   const remoteForCard = remoteOf(ctx);
   if ((ctx as any).slots === undefined || remoteForCard?.settings === undefined) return;
 

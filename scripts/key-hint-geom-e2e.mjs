@@ -74,6 +74,14 @@ const PORT = Number(opt('port', 4157));
 const CHROME = process.env.CHROME_BIN
   ?? join(homedir(), '.cache/ms-playwright/chromium-1248/chrome-linux64/chrome');
 const REPO = dirname(dirname(fileURLToPath(import.meta.url)));
+/**
+ * `--shot <dir>`：把取证现场截下来存到该目录（默认不截）。
+ *
+ * **截图不是判据**：本脚本的判定一律来自 `getBoundingClientRect()`。截图的价值在另一处——
+ * 几何数字正确但**看着不对**这类问题（颜色太淡、压住了 placeholder、和幽灵视觉上难分）
+ * 只有人眼能判，而审 PR 的人手上没有现场。所以截图是给人看的物证，不参与 exit code。
+ */
+const SHOT_DIR = opt('shot', '') === '' ? '' : String(opt('shot', '')).replace(/^~/, homedir());
 if (flag('cleanup')) {
   // 收尾走沙箱自己的三处枚举（含工作区），不手工 rm（本仓「工作区不一定在 home 里」那条）。
   const { execFileSync } = await import('node:child_process');
@@ -183,7 +191,13 @@ const cdp = async () => {
     // CDP 的 send() 已拆掉外层 {result} ⇒ 值在 r.result.value（写错时静默 undefined）。
     return r.result?.value;
   };
-  return { send, evaluate, consoleLines, close: () => { try { ws.close(); } catch { /* noop */ } proc.kill('SIGKILL'); rmSync(dir, { recursive: true, force: true }); } };
+  /** 存一张截图；只截视口（不做 fullPage，现场就是用户看到的这一屏）。 */
+  const shot = async (file) => {
+    const r = await send('Page.captureScreenshot', { format: 'png' });
+    writeFileSync(file, Buffer.from(r.data, 'base64'));
+    return file;
+  };
+  return { send, evaluate, shot, consoleLines, close: () => { try { ws.close(); } catch { /* noop */ } proc.kill('SIGKILL'); rmSync(dir, { recursive: true, force: true }); } };
 };
 
 const HELPERS = `
@@ -195,7 +209,11 @@ window.__k = {
   wait: (ms) => new Promise((r) => setTimeout(r, ms)),
   until: async (fn, ms) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (fn()) return true; await window.__k.wait(150); } return false; },
   dismiss: async () => {
-    const labels = ['保留当前显示', '暂不开启', '以后再说', '知道了', '不用了', '保留原样', '继续', '同意', '我已阅读'];
+    // ⚠️ 这个列表要覆盖**其他插件**的推广弹窗：实测 dsh-context × dsh-cost-meter 的
+    //    「让上下文占用与费用一起可见」全屏模态会盖住整个输入区（按钮是「暂不启用」）。
+    //    漏了它 ⇒ 量到的几何是弹窗后面的，截图也全是别人的广告。
+    const labels = ['保留当前显示', '暂不开启', '以后再说', '知道了', '不用了', '保留原样',
+      '暂不启用', '取消', '稍后', '关闭', '继续', '同意', '我已阅读'];
     for (let k = 0; k < 8; k += 1) {
       let hit = false;
       for (const d of window.__k.qa('[role=dialog], dialog[open]')) {
@@ -238,7 +256,7 @@ window.__k = {
       return { x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.width), h: Math.round(b.height),
                top: Math.round(b.top), bottom: Math.round(b.bottom), left: Math.round(b.left), right: Math.round(b.right) }; };
     const overlay = document.getElementById('dsh-suggest-ghost-overlay');
-    const hint = document.getElementById('dsh-suggest-ghost-keyhint');
+    const hint = document.querySelector('[data-suggest-ghost-keyhint]');
     return {
       composer: r(window.__k.composer()),
       overlay: r(overlay),
@@ -272,7 +290,16 @@ try {
   c = await cdp();
   await c.send('Page.enable');
   await c.send('Runtime.enable');
-  await c.send('Page.navigate', { url: urlOf() });
+  // 视口：默认窗口太窄（实测 780x380），截出来的图只看得到一条会话，没有取证价值。
+  // 用 1280x800（本仓其他 GUI 取证的常用尺寸），且**必须在 navigate 之前设**。
+  await c.send('Emulation.setDeviceMetricsOverride',
+    { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
+  // 禁缓存 + 每次带一个唯一 query：实测改完 `lib/client.js` 重新部署后，页面仍在跑
+  // 旧客户端（位置、z-index、甚至遮住它的元素都一模一样）—— 看起来像"改了没生效"，
+  // 实际是 HTTP 缓存。这一条一定要有，否则会去改本来已经对的代码。
+  await c.send('Network.enable');
+  await c.send('Network.setCacheDisabled', { cacheDisabled: true });
+  await c.send('Page.navigate', { url: `${urlOf()}&_=${Date.now()}` });
   await sleep(1500);
   await c.evaluate(HELPERS);
   await c.evaluate('window.__k.dismiss()');
@@ -404,6 +431,9 @@ try {
   // 全新沙箱**没有任何历史** ⇒ 历史前缀补全无候选可出。先发一条真消息把历史建起来，
   // 回合结束后（宿主会推新的下一条建议），清空草稿重打前缀，这次才有东西可补。
   if (!ghostUp) {
+    // 种子消息要**够长、够多条**：用户实测的叠字发生在「对话区已滚到底、最后一条正文
+    // 紧贴输入卡片上沿」的时候。只发一条短消息时消息停在顶部，提示行翻上去也碰不到它，
+    // 判据 ③c 会给出"通过"的假象（本脚本第一版就是这样，没抓到用户的现场）。
     const seed = '这是用于建立历史的一条测试消息';
     await c.evaluate('window.__k.clearDraft()');
     await c.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
@@ -417,6 +447,33 @@ try {
     const cleaned = await c.evaluate(`(async () => { const x = window.__k;
       return x.until(() => (x.composer()?.textContent ?? '').length === 0, 8000); })()`);
     say(`  种子消息：提交前 ${before} 字符，提交后草稿已清=${cleaned}`);
+    if (cleaned) {
+      // 再灌几条长消息，把对话区填满并滚到底 —— 这才是用户截图里的那种布局。
+      for (let i = 0; i < 4; i += 1) {
+        const filler = `第${i + 1}条填充消息，用来把对话区滚到底部，使最后一条正文紧贴输入卡片上沿。`
+          + '这一段故意写长一些，保证每条都能占满好几行，从而真正把可视区填满。'
+          + '重复内容不影响判据，只影响布局。';
+        await c.evaluate('window.__k.clearDraft()');
+        await c.send('Input.insertText', { text: filler });
+        await sleep(250);
+        await c.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r', unmodifiedText: '\r' });
+        await c.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+        await c.evaluate(`(async () => { const x = window.__k;
+          return x.until(() => (x.composer()?.textContent ?? '').length === 0, 6000); })()`);
+        await sleep(400);
+      }
+      // 滚到底：把对话滚动容器拉到最底
+      await c.evaluate(`(() => {
+        const sels = ['[class*=viewArea]', '[class*=scrollBody]', '[class*=scroll]'];
+        for (const sel of sels) {
+          for (const el of document.querySelectorAll(sel)) {
+            if (el.scrollHeight > el.clientHeight) { el.scrollTop = el.scrollHeight; }
+          }
+        }
+        return true;
+      })()`);
+      await sleep(600);
+    }
     // 等回合结束（宿主在 turn/end 后才推下一条建议）
     let ended = await c.evaluate(`(async () => { const x = window.__k;
       return x.until(() => window.__k.qa('[data-streaming]').length === 0
@@ -451,8 +508,8 @@ try {
         phase: n?.dataset.phase ?? null,
         draftChars: (n?.textContent ?? '').length,
         overlay: el == null ? null : { shown: el.dataset.shown ?? null, display: getComputedStyle(el).display, chars: (el.textContent ?? '').length },
-        keyhint: document.getElementById('dsh-suggest-ghost-keyhint') == null ? null
-          : { flag: document.getElementById('dsh-suggest-ghost-keyhint').dataset.keyhint },
+        keyhint: document.querySelector('[data-suggest-ghost-keyhint]') == null ? null
+          : { flag: document.querySelector('[data-suggest-ghost-keyhint]').dataset.keyhint },
       };
     })()`);
     say(`  未出幽灵的现场：${JSON.stringify(why)}`);
@@ -499,21 +556,291 @@ try {
     skip('判据 4（文案跟随设置）', '同上');
   } else {
     // ── 判据 1：在场 ──
-    check('① 提示行存在且已显示（display:block 且 data-keyhint="1"）',
-      g.hintExists && g.hintFlag === '1' && g.hintDisplay === 'block',
-      `exists=${g.hintExists} flag=${g.hintFlag} display=${g.hintDisplay} text=${JSON.stringify(g.hintText)}`);
+    const present = await c.evaluate(`(() => {
+      const h = document.querySelector('[data-suggest-ghost-keyhint]');
+      if (h == null) return { exists: false };
+      return { exists: true, text: (h.textContent ?? ''), display: getComputedStyle(h).display,
+        rect: (() => { const r = h.getBoundingClientRect();
+          return { top: Math.round(r.top), bottom: Math.round(r.bottom),
+                   left: Math.round(r.left), right: Math.round(r.right), h: Math.round(r.height) }; })() };
+    })()`);
+    check('① 提示行由宿主槽位渲染出来（存在于 DOM、可见、有文案）',
+      present.exists && present.display !== 'none' && (present.text ?? '').length > 0,
+      JSON.stringify(present));
 
-    // ── 判据 2：在编辑器下方 ──
-    const below = g.hint != null && g.composer != null && g.hint.top >= g.composer.bottom - 1;
-    check('② 提示行在编辑器**下方**（hint.top ≥ composer.bottom − 1）',
-      below, `composer.bottom=${g.composer?.bottom} hint.top=${g.hint?.top}`);
+    // ── 判据 2：它挂在宿主的 overlay 锚点里，且浮在锚点**上方**（不占行位）──
+    //
+    // 槽位从 `dock` 换成 `overlay` 之后，位置语义变成:
+    //   父级 = `.overlayAnchor`（position:absolute; height:0; 在输入卡片顶部），
+    //   提示行 = 该锚点的子项、`bottom:100%` ⇒ 浮在锚点上方一行。
+    // 判据直接查这两件事：父级是 overlay 锚点、且 rect 在锚点之上。
+    const inStack = await c.evaluate(`(() => {
+      const h = document.querySelector('[data-suggest-ghost-keyhint]');
+      if (h == null) return { step: 'absent' };
+      const anchor = h.parentElement;
+      const isAnchor = anchor != null && anchor.hasAttribute('data-composer-overlay');
+      const ar = anchor?.getBoundingClientRect() ?? null;
+      const hr = h.getBoundingClientRect();
+      const n = window.__k.composer();
+      const card = n?.closest('[data-input-scroll]')?.parentElement ?? n?.parentElement ?? null;
+      const cr = card?.getBoundingClientRect() ?? null;
+      // 父链画像：槽位容器可能多包一层（宿主 list 槽通常有自己的 wrapper），
+      // 所以不能假设 parentElement 就是锚点本身。
+      const chain = []; let e2 = h;
+      for (let k = 0; k < 4 && e2 != null; k += 1) {
+        const rr = e2.getBoundingClientRect();
+        chain.push({ tag: e2.tagName, cls: (e2.className ?? '').toString().slice(0, 26),
+          overlay: e2.hasAttribute?.('data-composer-overlay') ?? false,
+          pos: getComputedStyle(e2).position,
+          rect: [Math.round(rr.top), Math.round(rr.bottom)] });
+        e2 = e2.parentElement;
+      }
+      return { step: 'ok', chain, isAnchor,
+        anchorH: ar === null ? null : Math.round(ar.height),
+        aboveAnchor: (() => {
+          const a = chain.find((c) => c.overlay === true);
+          return a == null ? false : hr.bottom <= a.rect[0] + 1;
+        })(),
+        insideCard: cr === null ? null : (hr.left >= cr.left - 1 && hr.right <= cr.right + 1),
+        pos: getComputedStyle(h).position,
+        hint: [Math.round(hr.top), Math.round(hr.bottom)], anchor: ar === null ? null : [Math.round(ar.top), Math.round(ar.bottom)] };
+    })()`);
+    // 判据按实测的形状写：父级可能多一层 wrapper，**祖上有 overlay 锚点**即可，
+    // 关键是要「浮在锚点上方」（不占行位）且「在卡片宽度内」。
+    check('② 提示行挂在 overlay 锚点族里，且横向落在输入卡片宽度内',
+      inStack?.step === 'ok'
+        && (inStack.chain ?? []).some((c) => c.overlay === true)
+        && inStack.insideCard === true,
+      JSON.stringify(inStack));
 
-    // ── 判据 3：不与幽灵 / 编辑器重叠 ──
-    const aOverlay = inter(g.hint, g.overlay);
-    const aComposer = inter(g.hint, g.composer);
-    check('③ 提示行与幽灵、与编辑器都无交集（面积交 = 0）',
-      aOverlay === 0 && aComposer === 0,
-      `与 overlay 交=${aOverlay}px² 与 composer 交=${aComposer}px²\n      hint=${JSON.stringify(g.hint)}\n      overlay=${JSON.stringify(g.overlay)}`);
+    // ── 判据 ②b：横向与输入卡片**对齐**（宽度约束一致、左边缘重合）──
+    //
+    // 判据 ② 只验了"在卡片上方"，实测过的错位是**横向**的：提示行贴 composerStack 左缘
+    // （x≈283）而卡片居中（x≈427），用户截图反馈「怎么在这个位置」。几何都对、观感全错。
+    // ⇒ 直接比左边缘：差值超过 2px 就算没对齐（留 2px 容差吸收圆角/亚像素）。
+    const align = await c.evaluate(`(() => {
+      const h = document.querySelector('[data-suggest-ghost-keyhint]');
+      const n = window.__k.composer();
+      if (h == null || n == null) return { step: 'absent' };
+      const card = n.closest('[data-input-scroll]')?.parentElement ?? n.parentElement;
+      const hr = h.getBoundingClientRect();
+      const cr = card.getBoundingClientRect();
+      return { step: 'ok', hintLeft: Math.round(hr.left), cardLeft: Math.round(cr.left),
+        hintW: Math.round(hr.width), cardW: Math.round(cr.width),
+        delta: Math.round(Math.abs(hr.left - cr.left)) };
+    })()`);
+    check('②b 提示行与输入卡片横向对齐（左边缘差值 ≤ 2px）',
+      align?.step === 'ok' && align.delta <= 2,
+      `hintLeft=${align?.hintLeft} cardLeft=${align?.cardLeft} delta=${align?.delta} hintW=${align?.hintW} cardW=${align?.cardW}`);
+
+    // ── 判据 3：不与**草稿文字**、不与**幽灵文字**相交 ──
+    //
+    // 判据形态改过一次：原先要求「与编辑器元素的矩形零交集」，但那过严 ——
+    // 编辑器盒（`[data-composer-input]`）从卡片顶往下 8px 就开始，**包含自身 padding
+    // 与行高余量**；而提示行放在卡片顶部 14px 空隙里，几何上必然与那个矩形相交，
+    // 视觉上却只占上方 11px、完全不碰草稿的字。
+    //
+    // ⇒ 改为量**文字**：用 Range 取草稿首字符矩形、幽灵 overlay 矩形，比它们的交集。
+    //    这才是"压没压到内容"的直接判据。
+    const textRects = await c.evaluate(`(() => {
+      const n = window.__k.composer();
+      const h = document.querySelector('[data-suggest-ghost-keyhint]');
+      const ov = document.getElementById('dsh-suggest-ghost-overlay');
+      if (n == null || h == null) return null;
+      const hr = h.getBoundingClientRect();
+      // 草稿文字：第一个非空文本节点的首字符
+      let draft = null;
+      const walker = document.createTreeWalker(n, NodeFilter.SHOW_TEXT);
+      for (let t = walker.nextNode(); t != null; t = walker.nextNode()) {
+        if ((t.nodeValue ?? '').trim() === '') continue;
+        const rng = document.createRange();
+        rng.setStart(t, 0); rng.setEnd(t, Math.min(1, (t.nodeValue ?? '').length));
+        const rr = rng.getBoundingClientRect();
+        if (rr.height > 0) { draft = { top: Math.round(rr.top), bottom: Math.round(rr.bottom),
+          left: Math.round(rr.left), right: Math.round(rr.right) }; break; }
+      }
+      // ⚠️ overlay 的 rect 含行高（比字形高），直接用它比会得到假阳性（实测 1148px²）。
+      // 用 Range 量幽灵**首字符的墨迹矩形**，与"压没压到字"这个真实问题对齐。
+      let ovr = null;
+      if (ov != null && ov.dataset.shown === '1') {
+        const w2 = document.createTreeWalker(ov, NodeFilter.SHOW_TEXT);
+        for (let t = w2.nextNode(); t != null; t = w2.nextNode()) {
+          if ((t.nodeValue ?? '').trim() === '') continue;
+          const rng = document.createRange();
+          rng.setStart(t, 0); rng.setEnd(t, Math.min(1, (t.nodeValue ?? '').length));
+          const rr = rng.getBoundingClientRect();
+          if (rr.height > 0) { ovr = { top: Math.round(rr.top), bottom: Math.round(rr.bottom),
+            left: Math.round(rr.left), right: Math.round(rr.right) }; break; }
+        }
+        // 兜底：量不到字形就用元素 rect（至少不是静默跳过）
+        if (ovr === null) { const r = ov.getBoundingClientRect();
+          ovr = { top: Math.round(r.top), bottom: Math.round(r.bottom),
+            left: Math.round(r.left), right: Math.round(r.right) }; }
+      }
+      return { hint: { top: Math.round(hr.top), bottom: Math.round(hr.bottom),
+        left: Math.round(hr.left), right: Math.round(hr.right) }, draft, overlay: ovr };
+    })()`);
+    const aDraft = inter(textRects?.hint, textRects?.draft);
+    const aOverlayTxt = inter(textRects?.hint, textRects?.overlay);
+    check('③ 与草稿文字、与幽灵墨迹都不相交（面积交 = 0）',
+      textRects != null && aDraft === 0 && aOverlayTxt === 0,
+      `与草稿文字交=${aDraft}px² 与幽灵墨迹交=${aOverlayTxt}px² hint=${JSON.stringify(textRects?.hint)} draft=${JSON.stringify(textRects?.draft)} ghost=${JSON.stringify(textRects?.overlay)}`);
+
+    // ── 判据 3b：可见（命中测试；纯展示元素要临时打开 pointer-events）──
+    const hit = await c.evaluate(`(() => {
+      const h = document.querySelector('[data-suggest-ghost-keyhint]');
+      if (h == null) return { step: 'absent' };
+      const r = h.getBoundingClientRect();
+      const cx = r.left + 8;
+      // 采样点取盒内**稳妥的三等分处**，不用底边减 2：14px 盒高时那一点贴着下沿，
+      // 会被下一层（草稿行）命中 —— 那是 1px 级的边界效应，不是真的被盖住。
+      const ys = [r.top + 3, r.top + r.height / 2, r.bottom - 3];
+      const prev = h.style.pointerEvents;
+      h.style.pointerEvents = 'auto';
+      const probes = ys.map((cy) => {
+        const el = document.elementFromPoint(cx, cy);
+        const ok = el === h || (el != null && h.contains(el));
+        // 没命中的点要报出**是谁**盖住了它（只报 tag 等于没报）
+        let who = null;
+        if (!ok && el != null) {
+          const cs2 = getComputedStyle(el);
+          const r2 = el.getBoundingClientRect();
+          who = { tag: el.tagName, cls: String(el.className ?? '').slice(0, 22),
+            z: cs2.zIndex, pos: cs2.position, bg: cs2.backgroundColor,
+            rect: [Math.round(r2.top), Math.round(r2.bottom)] };
+        }
+        return { y: Math.round(cy), isHint: ok, tag: el?.tagName ?? null, who };
+      });
+      h.style.pointerEvents = prev;
+      return { step: 'ok', probes };
+    })()`);
+    check('③b 提示行可见（命中测试通过）',
+      hit?.step === 'ok' && hit.probes.every((x) => x.isHint), JSON.stringify(hit?.probes));
+
+    // ── 诊断：编辑器盒子的内边距（决定"卡片顶空白"到底在哪一层）──
+    const pad = await c.evaluate(`(() => {
+      const n = window.__k.composer();
+      const card = n?.closest('[data-input-scroll]')?.parentElement ?? n?.parentElement;
+      if (n == null || card == null) return null;
+      const cs = getComputedStyle(n), cc = getComputedStyle(card);
+      const nr = n.getBoundingClientRect(), cr = card.getBoundingClientRect();
+      return { composerPadTop: cs.paddingTop, cardPadTop: cc.paddingTop, cardGap: cc.gap,
+        composerTop: Math.round(nr.top), cardTop: Math.round(cr.top),
+        delta: Math.round(nr.top - cr.top) };
+    })()`);
+    say(`  内边距诊断：${JSON.stringify(pad)}`);
+
+    // ── 判据 3c：不压对话正文 ──
+    const overText = await c.evaluate(`(() => {
+      const h = document.querySelector('[data-suggest-ghost-keyhint]');
+      if (h == null) return { step: 'absent' };
+      const hr = h.getBoundingClientRect();
+      const inter = (a, b) => { const w = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+        const hh = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+        return w > 0 && hh > 0 ? Math.round(w * hh) : 0; };
+      const hits = [];
+      for (const el of document.querySelectorAll('[class*=markdown] p, [class*=viewArea] p, main p')) {
+        if (el === h || h.contains(el) || el.contains(h)) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) continue;
+        const a = inter(hr, r);
+        if (a > 0) hits.push({ area: a, text: (el.textContent ?? '').trim().slice(0, 18) });
+      }
+      return { step: 'ok', hits: hits.slice(0, 3) };
+    })()`);
+    check('③c 提示行不压住对话正文（面积交 = 0）',
+      overText?.step === 'ok' && overText.hits.length === 0, JSON.stringify(overText?.hits));
+
+    // ── 诊断：卡片顶部 → 草稿文字首行 之间**真实可用**的空白高度 ──
+    //
+    // 之前我把 `card padding-top:8px` 当成"可用高度"就下了"放不下"的结论，那是量错了层：
+    // 卡片里还有 `gap:12px`、编辑器自带 padding、行高余量。用户圈的位置明显更宽。
+    // 这里直接量几何：卡片顶 → 编辑器**文字首行**的顶部（用 Range 取首字符的 rect）。
+    const space = await c.evaluate(`(() => {
+      const n = window.__k.composer();
+      const card = n?.closest('[data-input-scroll]')?.parentElement ?? n?.parentElement;
+      if (n == null || card == null) return null;
+      const cr = card.getBoundingClientRect();
+      // 取编辑器内第一个文本节点的首字符矩形 = 草稿文字真正起始位置
+      let textTop = null;
+      const walker = document.createTreeWalker(n, NodeFilter.SHOW_TEXT);
+      for (let t = walker.nextNode(); t != null; t = walker.nextNode()) {
+        if ((t.nodeValue ?? '').trim() === '') continue;
+        const rng = document.createRange();
+        rng.setStart(t, 0); rng.setEnd(t, 1);
+        const rr = rng.getBoundingClientRect();
+        if (rr.height > 0) { textTop = Math.round(rr.top); break; }
+      }
+      const cs = getComputedStyle(n);
+      return { cardTop: Math.round(cr.top), textTop,
+        spaceAboveText: textTop === null ? null : textTop - Math.round(cr.top),
+        cardPadTop: getComputedStyle(card).paddingTop,
+        composerPadTop: cs.paddingTop, composerLineHeight: cs.lineHeight };
+    })()`);
+    say(`  卡片顶到草稿首行的空隙：${JSON.stringify(space)}`);
+
+    // ── 判据 ③d：提示行**不许盖住任何兄弟层**（方向被自己搞反过一次）──
+    //
+    // 踩过的坑：上一版写「谁盖住了提示行」（elementFromPoint 命中不是自己就红），
+    // 结果提示行 z-index 更高、它盖在排队卡片上 ⇒ 命中自己 ⇒ **全绿**，
+    // 而用户截图明显是重叠。方向错了：要紧的是「提示行有没有压到别人」。
+    // ⇒ 遍历所有可见兄弟元素，算与提示行的面积交；非零就是遮挡。
+    //    （跳过自己的祖先链与 pointer-events:none 的纯装饰层。）
+    const occl = await c.evaluate(`(() => {
+      const h = document.querySelector('[data-suggest-ghost-keyhint]');
+      if (h == null) return { step: 'absent' };
+      const hr = h.getBoundingClientRect();
+      const anc = new Set(); let a = h.parentElement;
+      while (a != null) { anc.add(a); a = a.parentElement; }
+      const hits = [];
+      for (const el of document.querySelectorAll('body *')) {
+        if (el === h || h.contains(el) || anc.has(el)) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width < 4 || r.height < 4) continue;
+        const cs = getComputedStyle(el);
+        if (cs.visibility === 'hidden' || cs.display === 'none' || Number(cs.opacity) === 0) continue;
+        // 只关心「有点像容器/卡片」的层：背景透明且无边框的纯 wrapper 不算
+        const hasSurface = cs.backgroundColor !== 'rgba(0, 0, 0, 0)' || cs.boxShadow !== 'none'
+          || parseFloat(cs.borderTopWidth) > 0;
+        if (!hasSurface) continue;
+        const w = Math.min(hr.right, r.right) - Math.max(hr.left, r.left);
+        const hh = Math.min(hr.bottom, r.bottom) - Math.max(hr.top, r.top);
+        if (w <= 0 || hh <= 0) continue;
+        hits.push({ who: el.tagName + '.' + String(el.className ?? '').slice(0, 22),
+          area: Math.round(w * hh), text: (el.textContent ?? '').trim().slice(0, 14) });
+      }
+      // 面积最小的先看（同一次重叠会被祖先链重复计入，取最内层）
+      hits.sort((x, y) => x.area - y.area);
+      return { step: 'ok', hits: hits.slice(0, 4), total: hits.length };
+    })()`);
+    check('③d 提示行未压住任何兄弟层（与所有有底色的可见元素面积交 = 0）',
+      occl?.step === 'ok' && occl.total === 0,
+      `hits=${JSON.stringify(occl?.hits)} total=${occl?.total}`);
+
+    // ── 现场截图（物证，不参与判定） ──
+    if (SHOT_DIR !== '') {
+      const out = join(SHOT_DIR, 'key-hint-ghost.png');
+      await c.shot(out);
+      say(`  已存截图：${out}`);
+      // 局部细节图：整屏图里 11px 提示行看不清，裁「输入卡片上沿 + 提示行 + 卡片首行」一条带。
+      const gg = await c.evaluate('window.__k.geom()');
+      if (gg?.composer != null) {
+        const pad = 20;
+        const left = Math.max(0, gg.composer.left - pad);
+        const top = Math.max(0, (present.rect?.top ?? gg.composer.top) - pad * 2);
+        const clip = {
+          x: left,
+          y: top,
+          width: Math.min(1280 - left, (gg.composer.right - left) + pad),
+          height: Math.min(800 - top, (gg.composer.bottom - top) + pad * 2),
+          scale: 2,
+        };
+        const r = await c.send('Page.captureScreenshot', { format: 'png', clip });
+        const detail = join(SHOT_DIR, 'key-hint-ghost-detail.png');
+        writeFileSync(detail, Buffer.from(r.data, 'base64'));
+        say(`  已存细节图：${detail}（clip=${JSON.stringify(clip)}）`);
+      }
+    }
 
     // ── 判据 4：提示行**反映实际生效的键**（不是硬编码 Tab） ──
     //
@@ -556,10 +883,45 @@ try {
     await c.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
     await sleep(1500);
     const g3 = await c.evaluate('window.__k.geom()');
-    check('⑤ 草稿清空后幽灵与提示行**成对消失**（hint display:none 且 flag=0，或幽灵还在则提示行也还在）',
-      (g3.overlayShown !== '1' && g3.hintFlag === '0') || (g3.overlayShown === '1' && g3.hintFlag === '1'),
-      `cleared=${JSON.stringify(cleared)}\n      overlayShown=${g3.overlayShown} hintFlag=${g3.hintFlag} hintDisplay=${g3.hintDisplay}`);
+    const hintGone = await c.evaluate(`(() => document.querySelector('[data-suggest-ghost-keyhint]') == null)()`);
+    check('⑤ 草稿清空后幽灵与提示行**成对消失**（槽位组件返回 null，节点不存在）',
+      (g3.overlayShown !== '1' && hintGone) || (g3.overlayShown === '1' && hintGone === false),
+      `cleared=${JSON.stringify(cleared)}\n      overlayShown=${g3.overlayShown} hintGone=${hintGone}`);
   }
+  // ── 判据 ⑥：**没有幽灵时提示行必须不在**（用户实测的 bug 回归闸）──
+  //
+  // 现场：草稿为空、幽灵不在屏上，提示行却还挂着。根因见 index.ts 的修复注释
+  // （清空散落在带 `shown !== null` 守卫的早退分支里）。
+  // 这里把草稿彻底清空、等幽灵消失，然后断言：
+  //   a) 幽灵确实不在（`shown !== '1'`）—— 否则本条 NOT-COVERED，不能算过；
+  //   b) 提示行节点**不存在**（槽位组件返回 null，不是 display:none）。
+  if (c != null) {
+    try {
+      await c.evaluate('window.__k.clearDraft()');
+      for (let k = 0; k < 3; k += 1) {
+        await c.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
+        await c.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
+      }
+      await sleep(2500);
+      const idle = await c.evaluate(`(() => {
+        const ov = document.getElementById('dsh-suggest-ghost-overlay');
+        return { ghostShown: ov?.dataset.shown ?? null,
+          ghostDisplay: ov == null ? null : getComputedStyle(ov).display,
+          draftChars: (window.__k.composer()?.textContent ?? '').length,
+          hintExists: document.querySelector('[data-suggest-ghost-keyhint]') != null };
+      })()`);
+      const noGhost = idle.ghostShown !== '1' || idle.ghostDisplay === 'none';
+      if (!noGhost || idle.draftChars > 0) {
+        skip('⑥ 无幽灵时提示行不在', `前置不成立：ghost=${idle.ghostShown}/${idle.ghostDisplay} draftChars=${idle.draftChars}`);
+      } else {
+        check('⑥ 没有幽灵文本时，提示行**完全不渲染**（节点不存在，不是隐藏）',
+          idle.hintExists === false, JSON.stringify(idle));
+      }
+    } catch (e) {
+      skip('⑥ 无幽灵时提示行不在', `清理步骤异常：${String(e).slice(0, 60)}`);
+    }
+  }
+  if (tally.notCovered > 0) say('（NOT-COVERED 不是通过：缺的前置写在上面对应行里）');
 } catch (e) {
   if (e !== NOT_COVERED) { tally.fail += 1; say(`✗ 脚本异常：${e.message}`); }
 } finally {
@@ -569,6 +931,6 @@ try {
     for (const pid of pids) { try { process.kill(Number(pid), 'SIGTERM'); } catch { /* noop */ } }
   }
   say(`\n== 汇总：PASS ${tally.pass} / FAIL ${tally.fail} / NOT-COVERED ${tally.notCovered} ==`);
-  if (tally.notCovered > 0) say('（NOT-COVERED 不是通过：缺的前置写在上面对应行里）');
+
   process.exit(tally.fail === 0 && tally.notCovered === 0 ? 0 : tally.fail > 0 ? 1 : 2);
 }
