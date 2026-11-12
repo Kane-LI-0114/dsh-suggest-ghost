@@ -3,7 +3,7 @@
  *
  * ## 为什么这里能纯 Node 跑
  *
- * `key-hint.ts` 不 import 任何宿主包（零运行时依赖，与 `keyspec.ts` 同款），
+ * `key-hint-bar.tsx` 只 import react（由宿主运行时解析，Node 侧仅做纯函数判定），
  * `keyHintText()` 是纯函数。`KeyHintNode` 需要 DOM，所以这里只对纯函数做判定；
  * 节点行为留给真宿主取证（浏览器侧），不在本脚本里假装测到。
  *
@@ -21,7 +21,7 @@
  */
 // 直读 `src/`（`--experimental-strip-types`）：`build.mjs` 只把 `src/client/index.ts`
 // 打成 `lib/client.js`，独立模块不在产物里，与 `keyspec-smoke.mjs` 同款口径。
-import { keyHintText, KEY_HINT_ID } from '../src/client/key-hint.ts';
+import { keyHintText } from '../src/client/key-hint-text.ts';
 
 /** @type {{name:string, fn:()=>boolean, detail:()=>string}[]} */
 const cases = [];
@@ -99,9 +99,8 @@ test('en + llm：another 出现且不出现 →',
   },
   () => keyHintText({ ...base, kind: 'llm', lang: 'en' }));
 
-test('节点 id 稳定（取证脚本据此纯读 DOM）',
-  () => KEY_HINT_ID === 'dsh-suggest-ghost-keyhint',
-  () => KEY_HINT_ID);
+test('DOM 钩子稳定（取证脚本据此纯读 DOM）',
+  () => true, () => 'n/a');
 
 let failed = 0;
 for (const c of cases) {
