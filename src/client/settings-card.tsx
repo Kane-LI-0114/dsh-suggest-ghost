@@ -365,6 +365,17 @@ export const GHOST_FIELDS: ReadonlyArray<{
     section: 'history',
     writable: true,
   },
+  {
+    key: 'showKeyHint',
+    label: { zh: '键位提示', en: 'Key hint' },
+    hint: {
+      zh: '建议出现时，在输入框下方浮一行当前键位提示（内容跟随你改过的快捷键）。关掉后说明只在设置页。',
+      en: 'While a suggestion is shown, float a line under the composer listing the live keys (it follows any shortcut you changed). Off = the explanation lives only in settings.',
+    },
+    kind: 'boolean',
+    section: 'history',
+    writable: true,
+  },
   // —— 停顿续写 ——
   {
     key: 'inlineEnabled',

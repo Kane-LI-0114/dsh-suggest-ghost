@@ -323,7 +323,7 @@ run('上界按真宿主实测分布取值，不是按快样本的算术', () => 
   );
 });
 
-run('设置页字段集合与基线一致（#108 之后共 31 项，含两个推理档位、流式投递、路由继承与两个生成中指示开关）', () => {
+run('设置页字段集合与基线一致（#108 之后共 32 项，含两个推理档位、流式投递、路由继承、两个生成中指示开关与 #157 键位提示）', () => {
   const hostSource = readFileSync(fileURLToPath(new URL('../src/index.ts', import.meta.url)), 'utf8');
   // 只截 `const EditableFields = {` 这个对象字面量本身：从起始 brace 找到它自己的
   // `};`。上一版在这里用 indexOf('/** 配置 schema') 取右边界，而源码里那句写在
@@ -371,7 +371,12 @@ run('设置页字段集合与基线一致（#108 之后共 31 项，含两个推
     'historyEnabled', 'historyCrossSession',
     'historyMaxEntries', 'historyMinChars',
     'inlineEnabled', 'inlineDelayMs', 'inlineMinChars', 'inlineMaxChars', 'completionReasoningEffort',
-    'wordAccept', 'acceptKey',
+    'wordAccept',
+    // #157：幽灵显示时的就地键位提示（默认开）。**只影响一行小字**：不参与生成、
+    // 不进提示词、不改采纳语义。进 schema / live-settings 键表 / 设置卡 / 客户端解析四处，
+    // 顺序与 `EditableFields` 一致（声明在 `wordAccept` 与 `acceptKey` 之间）。
+    'showKeyHint',
+    'acceptKey',
     // #127 两条（regen，声明在 `acceptKey` 之后、`languageMode` 之前）：**允许换一条** 与
     // **换一条快捷键**。两者都进 schema / live-settings 键表 / 设置卡 / 客户端解析四处；
     // 配额与冷却是常量、**刻意不是**字段（它们是安全边界，可配就等于把「连按刷调用」的上限
