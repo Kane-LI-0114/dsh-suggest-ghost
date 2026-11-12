@@ -1592,7 +1592,7 @@ function applyBody(ctx: Context): void {
     inlineMinChars: 4,
     wordAccept: true,
     // #157：幽灵显示时浮一行键位提示（默认开）。
-    showKeyHint: true,
+    showKeyHint: false,
     regenEnabled: true,
     regenKey: 'Alt+G',
     regenPending: false,
@@ -2756,7 +2756,7 @@ function applyBody(ctx: Context): void {
             inlineDelayMs: typeof v.inlineDelayMs === 'number' ? v.inlineDelayMs : 100,
             inlineMinChars: typeof v.inlineMinChars === 'number' ? v.inlineMinChars : 4,
             wordAccept: typeof v.wordAccept === 'boolean' ? v.wordAccept : true,
-            showKeyHint: typeof v.showKeyHint === 'boolean' ? v.showKeyHint : true,
+            showKeyHint: typeof v.showKeyHint === 'boolean' ? v.showKeyHint : false,
             regenEnabled: typeof v.regenEnabled === 'boolean' ? v.regenEnabled : true,
             regenKey: typeof v.regenKey === 'string' && v.regenKey.trim().length > 0 ? v.regenKey : 'Alt+G',
             suggestion: pushed?.suggestion === null || pushed?.suggestion === undefined

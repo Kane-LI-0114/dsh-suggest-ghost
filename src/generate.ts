@@ -226,7 +226,7 @@ export function flattenConfig(config: ResolvedPluginConfig): FlatConfig {
     // scripts/pending-indicator-smoke.mjs 逐处核对。
     caretGlowEnabled: readVolatile(config.caretGlowEnabled, false),
     boxGlowEnabled: readVolatile(config.boxGlowEnabled, false),
-    showKeyHint: readVolatile(config.showKeyHint, true),
+    showKeyHint: readVolatile(config.showKeyHint, false),
     acceptKey: readVolatile(config.acceptKey, 'Tab'),
     historyEnabled: readVolatile(config.historyEnabled, true),
     historyCrossSession: readVolatile(config.historyCrossSession, false),

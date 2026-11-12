@@ -850,6 +850,14 @@ export function SuggestGhostCard({ scope, locale, surface, modelCatalog, modelCa
   const [helpOpen, setHelpOpen] = useState<Record<string, boolean>>({});
   // 热度管理分组折叠：默认收起（管理列表较长，配置区保持紧凑）。
   const [hotOpen, setHotOpen] = useState(false);
+  /**
+   * 「外观」分组默认**折叠**。
+   *
+   * 这三个开关（两个光效 + 键位提示）都是"调一次就不再管"的视觉偏好，
+   * 常开会让设置页一上来就被它们占掉三行；折叠与「热度管理」那一节同款形态
+   * （`sgc-sectionBtn` + chevron + aria-expanded）。
+   */
+  const [appearanceOpen, setAppearanceOpen] = useState(false);
 
   // 「在设置中显示」开关：仅详情页显示，控制 settings.section 是否注册。
   // localStorage 非响应式，切换后需刷新页面生效。
@@ -1293,8 +1301,22 @@ export function SuggestGhostCard({ scope, locale, surface, modelCatalog, modelCa
         <div className={SECTION_LAYOUT.inline === 'grid' ? 'sgc-section-fields sgc-section-fieldsGrid' : 'sgc-section-fields'}>{renderFieldRun(inlineFields)}</div>
       </section>
       <section className="sgc-section" aria-labelledby="sgc-section-appearance">
-        <h3 className="sgc-section-heading" id="sgc-section-appearance">{t.sectionAppearance}</h3>
-        <div className={SECTION_LAYOUT.appearance === 'grid' ? 'sgc-section-fields sgc-section-fieldsGrid' : 'sgc-section-fields'}>{renderFieldRun(appearanceFields)}</div>
+        <button
+          type="button"
+          id="sgc-section-appearance"
+          className="sgc-sectionBtn"
+          aria-expanded={appearanceOpen}
+          aria-controls="sgc-appearance-body"
+          onClick={() => setAppearanceOpen(o => !o)}
+        >
+          <span className="sgc-sectionBtnText">{t.sectionAppearance}</span>
+          <IconChevronDownOutlineRegular size={14} className={appearanceOpen ? 'sgc-chevron sgc-chevronOpen' : 'sgc-chevron'} />
+        </button>
+        {appearanceOpen && (
+          <div id="sgc-appearance-body">
+            <div className={SECTION_LAYOUT.appearance === 'grid' ? 'sgc-section-fields sgc-section-fieldsGrid' : 'sgc-section-fields'}>{renderFieldRun(appearanceFields)}</div>
+          </div>
+        )}
       </section>
       <section className="sgc-section" aria-labelledby="sgc-section-language">
         <h3 className="sgc-section-heading" id="sgc-section-language">{t.sectionLanguage}</h3>

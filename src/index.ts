@@ -238,12 +238,16 @@ const EditableFields = {
   /** 幽灵显示时允许 → 逐词采纳。 */
   wordAccept: z.boolean().default(true).volatile(),
   /**
-   * 幽灵显示时，在输入框下方浮一行「当前键位」提示（#157，默认**开**）。
+   * 幽灵显示时，在输入框顶部显示一行「当前键位」提示（#157，默认**关**）。
    *
    * 文案由当前生效的 `acceptKey` / `regenKey` / `wordAccept` **动态拼出**，
-   * 改键后提示自动跟着变；语言跟随宿主界面语言。关掉即回到「说明只在设置页」。
+   * 改键后提示自动跟着变；语言跟随宿主界面语言。
+   *
+   * ⚠️ 默认关是**用户明确要求的**（2026-11-12，Gitea #157）：
+   * 这行小字每帧跟着幽灵出现/消失，属于"看一眼就够"的信息，常显对老用户只是噪声。
+   * 别因为"新功能默认开更显眼"改回 true —— 那是拿存量用户的安静换新功能的曝光。
    */
-  showKeyHint: z.boolean().default(true).volatile(),
+  showKeyHint: z.boolean().default(false).volatile(),
   /** 采纳建议的输入框快捷键（默认 Tab）。 */
   acceptKey: z.string().min(1).default('Tab').volatile(),
   /**
