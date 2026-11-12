@@ -27,7 +27,7 @@
  *
  * @module dsh-suggest-ghost/client/key-hint-bar
  */
-import { useSyncExternalStore, type ReactElement } from 'react';
+import { useEffect, useState, useSyncExternalStore, type ReactElement } from 'react';
 
 /** 拼提示行需要的最小输入。 */
 export interface KeyHintInput {
@@ -173,11 +173,31 @@ export interface KeyHintDockFace {
  */
 export function KeyHintBarSlot(props: KeyHintDockFace): ReactElement | null {
   const { keyHintNow, subscribe } = props;
-  // `subscribe` 缺席时退化成「只在挂载时读一次」——不会崩，只是不跟随更新。
+  // `useSyncExternalStore` 负责「订阅到值变化」这条正路。
   const hint = useSyncExternalStore(
     subscribe ?? (() => () => {}),
     keyHintNow,
     keyHintNow,
   );
+  /**
+   * 兜底自检：**不依赖任何外部通知**。
+   *
+   * 真机上出现过的 bug：草稿已清空、幽灵不在屏上，提示行却还挂着 —— 因为
+   * `setKeyHint(null)` 的通知发在「已退订、尚未重新订阅」的窗口里（单 watcher 结构
+   * 的时序缺口，见 index.ts 的注释）。主路径已经改成订阅者集合，但这类时序缺口
+   * 不该靠"改对了就不会再发生"来保证。
+   *
+   * 这里每 1s 读一次真实值，与当前渲染值不同就强制重渲染。开销是一个闭包读 + 值比较，
+   * 对页面无可测影响；换来的是「不管通知有没有丢，界面最多晚 1s 自愈」。
+   */
+  const [, bump] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => {
+      // 值真的变了才 bump，避免每秒空转一次渲染
+      if (keyHintNow() !== hint) bump((n) => n + 1);
+    }, 1000);
+    return () => clearInterval(id);
+  }, [hint, keyHintNow]);
+
   return <KeyHintBar hint={hint} />;
 }

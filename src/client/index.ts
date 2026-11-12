@@ -1363,8 +1363,17 @@ function applyBody(ctx: Context): void {
    * 这也是它不可能再压到正文的原因（见 key-hint-bar.ts 模块注释）。
    */
   let keyHintValue: KeyHintInput | null = null;
-  let keyHintWatcher: (() => void) | null = null;
-  /** 设置当前提示并通知槽位重渲染（值未变则什么都不做，避免无谓渲染）。 */
+  /**
+   * 订阅者集合（不是单个回调）。
+   *
+   * ⚠️ 原实现只存一个 `keyHintWatcher`，用户在真机上看到的 bug 就是它：
+   * React 的 `useSyncExternalStore` 在重挂载/严格模式下会 **退订再订阅**，
+   * 而 `setKeyHint()` 恰好落在"已退订、还没重新订阅"的窗口里时，通知发给了一个
+   * 已经失效的回调 ⇒ **DOM 停在上一帧**（草稿清空、幽灵不在，提示行却还挂着）。
+   * 单槽位 + 单回调这个结构本身就容不下这种时序，所以改成集合并逐个调用。
+   */
+  const keyHintSubs = new Set<() => void>();
+  /** 设置当前提示并通知所有订阅者（值未变则什么都不做，避免无谓渲染）。 */
   const setKeyHint = (next: KeyHintInput | null): void => {
     const same = (keyHintValue === null && next === null)
       || (keyHintValue !== null && next !== null
@@ -1373,7 +1382,10 @@ function applyBody(ctx: Context): void {
         && keyHintValue.regenEnabled === next.regenEnabled && keyHintValue.lang === next.lang);
     if (same) return;
     keyHintValue = next;
-    keyHintWatcher?.();
+    // 复制一份再遍历：订阅者在回调里退订是正常行为，直接遍历 Set 会漏掉后面的。
+    for (const fn of [...keyHintSubs]) {
+      try { fn(); } catch { /* 单个订阅者抛错不能影响其它订阅者，也不能中断渲染路径 */ }
+    }
   };
   const keyHintNow = (): KeyHintInput | null => keyHintValue;
   /**
@@ -3266,8 +3278,8 @@ function applyBody(ctx: Context): void {
         inject: () => ({
           keyHintNow,
           subscribe: (fn: () => void) => {
-            keyHintWatcher = fn;
-            return () => { if (keyHintWatcher === fn) keyHintWatcher = null; };
+            keyHintSubs.add(fn);
+            return () => { keyHintSubs.delete(fn); };
           },
         }),
       }, KeyHintBarSlot),
