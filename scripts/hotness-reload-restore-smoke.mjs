@@ -16,6 +16,14 @@
 import assert from 'node:assert/strict';
 import { Context, Service } from '@deepseek-ai/cordis';
 import { setupHotnessPersistence } from '../lib/hotness-store.js';
+// ⚠️ 必须从 **lib/** 取，与上面 `hotness-store.js` 同源。
+// 上一版从 `../src/*.ts` 取，而 `hotness-store` 是 `../lib/*.js` —— 两份模块各自
+// 持有一个池（模块级 `globalThis` 键相同，但 ts/ js 两份文件是不同模块实例路径？
+// 不，是**加载顺序**问题：ts 那份先建池、js 那份复用同一 globalThis 键，看似共享；
+// 但 `__resetPoolForTests` 关掉的是 ts 那份已知的条目，而 js 那份用 `facility.open`
+// 造的数据源不同）。实测表现为「open 只调 1 次却没恢复」。
+// ⇒ 统一走 lib（`tsc && node build.mjs` 会把它一并产出），确保同一个池。
+import { __resetPoolForTests } from '../lib/hotness-domain-pool.js';
 import { HOT_TABLE_MAX_ENTRIES } from '../lib/hotness.js';
 // 留痕自 2026-10-26 起分级：默认只有 warn/error 到达用户侧（心跳类走 console.debug 静默）。
 // 本脚本靠抓 `[ops-trace]` 文本断言行为，故在加载插件前把门槛放到 debug。
@@ -24,6 +32,10 @@ process.env.DSH_SUGGEST_GHOST_TRACE ??= 'debug';
 
 let failed = 0;
 const scenario = async (name, fn) => {
+  // ⚠️ 每个用例**前后都清池**：域池是进程级共享的（hotness-domain-pool.ts 的设计），
+  // 用例之间若复用同一个句柄，后一条会拿到前一条那个**已经被清空的域**，
+  // 表现为「open 只调 1 次却没恢复」—— 那是测试隔离问题，不是插件行为。
+  await __resetPoolForTests();
   try {
     await fn();
     realLog(`  ✓ ${name}`);
@@ -34,6 +46,7 @@ const scenario = async (name, fn) => {
     realLog(`  ✗ ${name}\n      ${String(error.message).split('\n')[0]}`);
   } finally {
     captureOff();
+    await __resetPoolForTests();
   }
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -108,22 +121,41 @@ const HIST = [
   { text: '跑冒烟', count: 118, lastSeq: 30 },
 ];
 
-// —— 1. 竞态可控版：域名被占 ⇒ 必须重试到释放，而不是静默降级成空表 ——
-await scenario('域名被前一个句柄占着（重载竞态）：重试后恢复 n>0，且三行正面留痕都在', async () => {
+// —— 1. 域已从「fiber 所有 + 重试」改成「进程级池化共享」（hotness-domain-pool.ts）——
+//
+// 这条断言在池化之后**语义变了**，理由写在这里免得下次有人改回去：
+//
+// 旧语义：域名被占 ⇒ 新 fiber 重试 40×150ms 等旧的释放，等到了才算恢复。
+//   但实测那条路在 HMR 下永远走不通（旧 fiber 的 disposer 不跑，见
+//   `cannot create effect on inactive context`），于是「重试」只是把失败推迟 6 秒。
+//
+// 新语义：同名域由池复用，**根本不该出现 already-open**，因此
+//   ① `open()` 只被调用 1 次（复用而非重开）；
+//   ② 留痕里不再有 `attempt=[2-9]`（没有重试），改由 `pooled=1` 标记走的是池。
+//   恢复本身仍然是 n>0 —— 这是这条用例真正要保的性质。
+await scenario('外部占用（前 3 次 open 被拒）：重试后恢复 n>0，且正面留痕齐全', async () => {
   captureOn();
   const { root, callsOf } = await realStackWithRejections(3, HIST);
   const { hotness, persistence } = setupHotnessPersistence(root);
   for (let i = 0; !persistence.restored && i < 300; i += 1) await sleep(25);
   captureOff();
   assert.equal(persistence.restored, true,
-    `重试没等到句柄释放（open 被调用 ${callsOf()} 次）⇒ 恢复没发生，卡片会显示「共 0 条」`);
+    `池化后仍没恢复（open 被调用 ${callsOf()} 次）⇒ 恢复没发生，卡片会显示「共 0 条」`);
   assert.equal(hotness.size, 3, `恢复条数应为 3；实际 ${hotness.size}`);
+  // ⚠️ 这里的次数**不是 1**：本场景让前 3 次 open 被拒（模拟**外部**占用，
+  // 例如另一个进程开着同一个 DSH_HOME）。池解决不了外部占用，只能靠重试 ——
+  // 所以 1 + 3 = 4 是正确值。池复用的性质由 hotness-domain-pool-smoke 直接测。
+  assert.equal(callsOf(), 4,
+    `open() 被调用了 ${callsOf()} 次；外部占用 3 次 + 成功 1 次 = 4`);
   const opened = captured.filter((l) => l.includes('hotness domain opened'));
   const restored = captured.filter((l) => l.includes('hotness restored'));
   const ready = captured.filter((l) => l.includes('hotness ready'));
   assert.ok(opened.length >= 1, `缺「hotness domain opened」（命中 ${opened.length}）⇒ 看不出 open 到底成没成`);
-  assert.match(opened[0] ?? '', /attempt=[2-9]/,
-    `重试过却把 attempt 记丢了：${JSON.stringify(opened[0] ?? null)}`);
+  assert.match(opened[0] ?? '', /pooled=1/,
+    `留痕要标明走的是池（pooled=1）：${JSON.stringify(opened[0] ?? null)}`);
+  const busy = captured.filter((l) => l.includes('domain busy'));
+  assert.ok(busy.length >= 1,
+    `外部占用重试必须留痕（否则「等了 6 秒」与「立刻就放弃」在日志里同形）`);
   assert.ok(restored.length >= 1 && /n=3/.test(restored[0] ?? ''),
     `缺「hotness restored: n=…」（命中=${JSON.stringify(restored.slice(0, 2))}）`);
   assert.ok(ready.length >= 1 && /dirty=\d+/.test(ready[0] ?? ''),
@@ -206,7 +238,7 @@ await scenario('回归：真存储栈下 boot 恢复照常（改竞态处理不�
  *  2. 跑完那个钩子，域名必须真的腾出来——第二次挂载要能 open 且恢复出 3 条。
  *     只断言 1 不够：钩子注册了却没释放名字（宿主的 `onClosed` 挂钩坏了）同样是永久占用。
  */
-await scenario('open 成功之后、恢复之前抛：钩子必须已注册，且跑完能把域名腾给下一个 fiber', async () => {
+await scenario('open 成功之后、恢复之前抛：钩子必须已注册，且下一个 fiber 仍能拿到域', async () => {
   const { root } = await realStackWithRejections(0, HIST);
   const facility = root.storageDomain ?? root.get?.('storageDomain');
   const realOpen = facility.open.bind(facility);
@@ -252,11 +284,12 @@ await scenario('open 成功之后、恢复之前抛：钩子必须已注册，�
   // 所以 `await Promise.all(...)` 等于没等 ⇒ 这里改成直接问宿主「这个名字还开着吗」
   // （`facility.get(name)` 是 dsh-storage-domain 的公开诊断面），有界轮询而不是猜一个 sleep。
   await Promise.all(disposers.map((d) => d()));
-  const stillOpen = async () => (facility.get ? facility.get('suggest_ghost_hotness') !== undefined : true);
-  let waited = 0;
-  while (await stillOpen() && waited < 3000) { await sleep(50); waited += 50; }
-  assert.equal(await stillOpen(), false,
-    `钩子跑了 ${waited}ms 之后域名还开着 ⇒ 「注册了钩子」不等于「名字腾得出来」，第二个 fiber 依旧打不开`);
+  // ⚠️ 判据在「域池化」之后**故意放宽一条**，理由写清（否则下一个人会以为漏测）：
+  // 旧实现要求「钩子跑完宿主那边的名字必须腾出来」，因为新 fiber 只能靠旧的关干净才 open 得上。
+  // 现在域是进程级池化共享的：release() 只减引用、归零后还要等 IDLE_CLOSE_MS(30s) 才真关 ——
+  // 那样设计正是为了覆盖 HMR 重启窗口 ⇒ 「钩子跑完名字还开着」在新语义下是正常的。
+  // 真正要保的性质没变，而且更硬：**第二个 fiber 能拿到域并恢复出 n=3**（下面照旧断言）。
+  // 名字最终腾不腾由池的 idle 逻辑负责，不在这条用例的判定范围内。
   facility.open = realOpen;
   captureOn();
   const second = setupHotnessPersistence(root);

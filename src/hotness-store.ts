@@ -29,6 +29,7 @@ import { traceAt } from './trace.js';
 import type { TraceLevel } from './trace.js';
 import type { HotnessChangeHook, HotnessOp } from './hotness.js';
 import { HOT_TABLE_MAX_ENTRIES, HotnessTable } from './hotness.js';
+import { acquireDomain, type DomainLease } from './hotness-domain-pool.js';
 
 /** 持久层一条记录：一个去重用户文本的累计频次（lastSeq 不持久化，见模块注释）。
  * `pinned` 仅在 true 时携带（可选字段保持与 v1 介质双向兼容）。 */
@@ -120,6 +121,13 @@ const hotnessDomainSpec = defineDomain({
 });
 
 type HotnessDomain = Domain<typeof hotnessDomainSpec>;
+/**
+ * 域名的池键：与 storageDomain spec 的 name 对齐。
+ *
+ * 用常量而不是内联字符串 —— 池是按名字共享的，两处写歪一个字就会变成两个域
+ * （看起来"恢复了"其实是空表），这种错查起来极贵。
+ */
+const HOTNESS_DOMAIN_KEY = 'suggest_ghost_hotness';
 type EntriesTable = KvTable<string, HotEntryRecord>;
 
 /** `_ops` 反向通道载荷（client 管理面板写入 settings 的 JSON）。 */
@@ -185,6 +193,8 @@ export function setupHotnessPersistence(ctx: Context): {
   const dirty = new Map<string, Readonly<{ count: number; lastSeq: number; pinned: boolean }> | null>();
   let entries: EntriesTable | null = null;
   let domain: HotnessDomain | null = null;
+  /** 域租约：`close()` 时归还（只减引用，见池的模块注释）。 */
+  let domainLease: DomainLease<HotnessDomain> | null = null;
   /** 恢复合并完成前的脏标记先攒着（否则 live 计数会以「缺历史频次」的值抢先落盘）。 */
   let ready = false;
   /**
@@ -311,13 +321,19 @@ export function setupHotnessPersistence(ctx: Context): {
       await flush();
     } finally {
       const closing = domain;
+      const lease = domainLease;
       domain = null;
+      domainLease = null;
       entries = null;
       ready = false;
+      // ⚠️ **只归还租约，不直接关域**（见 hotness-domain-pool.ts）：
+      // 域是进程级资源，池里还可能有别的 fiber 在用；关它是池的职责（引用归零
+      // + 空闲期之后）。这里若直接 close，就会把别的 fiber 的句柄一夜抽走 ——
+      // 那正是旧的「各自 open / 各自 close」互相踩的形态。
       try {
-        await closing?.close(); // 排空已在域写链上的写入；幂等
+        lease?.release();
       } catch (error) {
-        ctx.logger.warn(`dsh-suggest-ghost: hotness domain close failed: ${String(error)}`);
+        ctx.logger.warn(`dsh-suggest-ghost: hotness domain release failed: ${String(error)}`);
       }
       // **这行是 #88 的续查工具，不是装饰**：现场 6 次热重载里 `hotness domain opened`
       // 出现 **0** 次、`restore FAILED` 10 次、`domain busy` 重试 28 次 —— 也就是新 fiber
@@ -329,7 +345,7 @@ export function setupHotnessPersistence(ctx: Context): {
       // 宿主侧 `close()` **确实**会把名字从 `reserved` 里摘掉（`dsh-storage-domain/lib/index.js:385-386`
       // 构造 Domain 时传 `onClosed = () => { domains.delete; reserved.delete }`），所以 (ii)
       // 的先验最低——但没有这行留痕，先验就不是证据。
-      hotnessTrace(`hotness domain closed released=${closing ? 1 : 0} size=${hotness.size} status=${restoreStatus}`);
+      hotnessTrace(`hotness domain closed released=${closing ? 1 : 0} pooled=1 size=${hotness.size} status=${restoreStatus}`);
     }
   };
 
@@ -362,23 +378,33 @@ export function setupHotnessPersistence(ctx: Context): {
         clearTimeout(grace);
         // 从这里开始才叫「恢复在飞行中」：此时表里还没有历史频次，发出去就是盖掉用户的数据。
         restoreStatus = 'pending';
-        let opened = null;
-        let attempt = 0;
-        for (;;) {
-          attempt += 1;
-          try {
-            opened = await facility.open(hotnessDomainSpec);
-            break;
-          } catch (error) {
-            const reason = String((error as Error)?.message ?? error).slice(0, 60);
-            if (attempt >= HOTNESS_OPEN_MAX_ATTEMPTS) throw new Error(`open rejected after ${attempt} attempts: ${reason}`);
-            if (attempt === 1 || attempt % 10 === 0) {
-              hotnessTrace(`hotness domain busy, retrying attempt=${attempt} reason=${reason}`);
-            }
-            await new Promise((r) => setTimeout(r, HOTNESS_OPEN_RETRY_MS));
-          }
-        }
-        hotnessTrace(`hotness domain opened attempt=${attempt}`);
+        // ── 域改成**进程级共享**（见 hotness-domain-pool.ts 的模块注释）──
+        //
+        // 原来这里是「本 fiber 自己 open、失败重试 40×150ms、仍失败就降级内存」。
+        // 实测那条路会永久性失去持久化：宿主把同名域做成进程内独占，而本插件的释放
+        // 依赖 `ctx.effect` 的 disposer —— HMR 时旧 fiber 的 disposer 不跑
+        // （现场 `cannot create effect on inactive context`），域被占住，继任者 6s 内
+        // 拿不到 ⇒ 磁盘 2000 条完好但内存表从 0 起算。
+        //
+        // 现在：池里有就复用，没有才 open。旧 fiber 的租约不归还也无害（计数停在 1，
+        // 域一直可用），归零后还有 IDLE_CLOSE_MS 的空闲期专门覆盖 HMR 的重启窗口。
+        const lease = await acquireDomain<HotnessDomain>(
+          HOTNESS_DOMAIN_KEY,
+          () => facility.open(hotnessDomainSpec) as Promise<HotnessDomain>,
+          // 池命中的那一路**不消耗**这个预算；只有真要新开才等（外部占用场景）。
+          {
+            attempts: HOTNESS_OPEN_MAX_ATTEMPTS,
+            delayMs: HOTNESS_OPEN_RETRY_MS,
+            onRetry: (attempt, reason) => {
+              if (attempt === 1 || attempt % 10 === 0) {
+                hotnessTrace(`hotness domain busy, retrying attempt=${attempt} reason=${reason}`);
+              }
+            },
+          },
+        );
+        const opened = lease.domain;
+        domainLease = lease;
+        hotnessTrace(`hotness domain opened pooled=${lease ? 1 : 0}`);
         // ⚠️ **顺序就是修复本体**（2026-10-23 现场：42 次 `apply called`、`opened` 0 次、
         // `close requested` / `closed` 也 0 次。⚠️ 那个持有者产生于这两行留痕装上**之前**，
         // 所以「它没注册钩子」与「注册了但 disposer 没跑」已经无法区分；本仓能确定的只有
