@@ -122,6 +122,8 @@ const SETTING_SPECS: Record<keyof FlatConfig, FieldSpec> = {
   historyMinChars: POS(1),
   wordAccept: BOOL,
   acceptKey: STR(false),
+  // #157：键位提示开关。与 `wordAccept` 同族（纯客户端展示开关），进同样的 spec 表。
+  showKeyHint: BOOL,
   // #127 重出。**只有这两键是配置项**：上限与冷却是安全边界、钉成常量
   // （`src/regen.ts` 顶部写了为什么不做成可配项，判据同 `COMPLETION_DEADLINE_MS`）。
   // `STR(false)` = 空串非法，与 `acceptKey` 同款：空白 spec 会让 `parseAcceptKey`

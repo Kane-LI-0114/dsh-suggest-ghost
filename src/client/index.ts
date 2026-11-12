@@ -161,6 +161,7 @@ let officialCatalogLoader: (() => void) | null = null;
 let officialCatalogListener: (() => void) | null = null;
 import type { PluginSettingsScope } from './settings-scope.js';
 import type { LocaleFaceLike } from './useGhostT.js';
+import { KeyHintNode } from './key-hint.js';
 
 /**
  * 宿主可观察快照的最小结构视图。不从 @deepseek-ai/dsh-client-runtime 导入：
@@ -1349,6 +1350,19 @@ function applyBody(ctx: Context): void {
   const sessions = ctx.get('sessions') as unknown as ClientSessionsSurface | undefined;
   if (sessions === undefined) return;
   const overlay = new GhostOverlay();
+  // 就地快捷键提示（#157）：**独立节点**，不是 overlay 的子节点 —— overlay 写死
+  // `pointer-events:none` 且 `align()` 把宽度收窄成「行尾到行末」，挂进去既不可交互
+  // 也会折行；`llm` 形态还没有行尾锚点。详见 key-hint.ts 模块注释。
+  const keyHint = new KeyHintNode();
+  /**
+   * 当前界面语言（提示行文案用）。
+   *
+   * 写成 thunk 而不是取值快照：`locale` 的 const 声明在 render 之后（同文件既有
+   * 注释解释了为什么必须那样排），而 render 只在调用期求值，thunk 天然避开 TDZ；
+   * 顺带拿到「语言切换后下一次显示就是新语言」的行为。
+   */
+  const activeLang = (): 'zh' | 'en' =>
+    ((ctx.get('locale') as LocaleFaceLike | undefined)?.getSnapshot().active === 'en' ? 'en' : 'zh');
   let lastSessionId: string | undefined;
 
   // ── localStorage 持久化：冷启动立即恢复历史/热度/建议，避免等待 host RPC ──
@@ -1492,6 +1506,8 @@ function applyBody(ctx: Context): void {
     inlineMinChars: number;
     /** 幽灵显示时允许 → 逐词采纳（Tab 始终整条采纳）。 */
     wordAccept: boolean;
+    /** #157：幽灵显示时浮一行键位提示。 */
+    showKeyHint: boolean;
     /** #127：换一条的开关与快捷键（宿主侧 `.volatile()` ⇒ 卡片可改、即时生效）。 */
     regenEnabled: boolean;
     regenKey: string;
@@ -1541,6 +1557,8 @@ function applyBody(ctx: Context): void {
     inlineDelayMs: 100,
     inlineMinChars: 4,
     wordAccept: true,
+    // #157：幽灵显示时浮一行键位提示（默认开）。
+    showKeyHint: true,
     regenEnabled: true,
     regenKey: 'Alt+G',
     regenPending: false,
@@ -2018,6 +2036,8 @@ function applyBody(ctx: Context): void {
     if (content === null || base === null) {
       if (shown !== null) {
         overlay.hide();
+        keyHint.hide();
+        keyHint.hide();
         shown = null;
       }
       return;
@@ -2043,6 +2063,8 @@ function applyBody(ctx: Context): void {
       // 「key 未变化」早退挡住，幽灵再也不出现。
       if (shown !== null) {
         overlay.hide();
+        keyHint.hide();
+        keyHint.hide();
         shown = null;
       }
       return;
@@ -2051,6 +2073,25 @@ function applyBody(ctx: Context): void {
     // 顺序——它是不自愈问题的最终兜底。attach() 内部短路已带 isConnected。
     overlay.attach(composerNow);
     overlay.show(content);
+    // 提示行只在「幽灵真的在屏幕上」时出现（与 overlay 同一帧、同一份 content）：
+    // 文案里的键名取自当前生效的设置，所以用户改键后下一次显示就是新键名。
+    // 判据 `overlay.isPainted` 与 ghost 的绘制闸同源 —— 自检不合格时幽灵不画，
+    // 提示行也不许单独留在那里说明一个不存在的建议。
+    if (overlay.isPainted && settings.showKeyHint) {
+      keyHint.show(
+        {
+          kind: content.kind,
+          acceptKey: content.kind === 'llm' ? content.acceptKey : DEFAULT_ACCEPT_KEY,
+          regenKey: settings.regenKey,
+          wordAccept: settings.wordAccept,
+          regenEnabled: settings.regenEnabled,
+          lang: activeLang(),
+        },
+        composerNow,
+      );
+    } else {
+      keyHint.hide();
+    }
     shown = { key, content, base };
   };
 
@@ -2669,6 +2710,7 @@ function applyBody(ctx: Context): void {
             inlineDelayMs: typeof v.inlineDelayMs === 'number' ? v.inlineDelayMs : 100,
             inlineMinChars: typeof v.inlineMinChars === 'number' ? v.inlineMinChars : 4,
             wordAccept: typeof v.wordAccept === 'boolean' ? v.wordAccept : true,
+            showKeyHint: typeof v.showKeyHint === 'boolean' ? v.showKeyHint : true,
             regenEnabled: typeof v.regenEnabled === 'boolean' ? v.regenEnabled : true,
             regenKey: typeof v.regenKey === 'string' && v.regenKey.trim().length > 0 ? v.regenKey : 'Alt+G',
             suggestion: pushed?.suggestion === null || pushed?.suggestion === undefined
@@ -2899,6 +2941,7 @@ function applyBody(ctx: Context): void {
         }
       }
       overlay.hide();
+      keyHint.hide();
       shown = null;
       return;
     }
@@ -2950,6 +2993,7 @@ function applyBody(ctx: Context): void {
             + ` baseDraftChars=${base.draft.length} baseRev=${String(base.rev)}`
             + ` ${frameHintFields(content.frame)}`);
           overlay.hide();
+          keyHint.hide();
           shown = null;
           return;
         }
@@ -2957,6 +3001,8 @@ function applyBody(ctx: Context): void {
       }
       if (wordAcceptSettled(content, accepted)) {
         overlay.hide();
+        keyHint.hide();
+        keyHint.hide();
         shown = null;
       }
     }

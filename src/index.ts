@@ -237,6 +237,13 @@ const EditableFields = {
   completionReasoningEffort: z.string().default('').volatile(),
   /** 幽灵显示时允许 → 逐词采纳。 */
   wordAccept: z.boolean().default(true).volatile(),
+  /**
+   * 幽灵显示时，在输入框下方浮一行「当前键位」提示（#157，默认**开**）。
+   *
+   * 文案由当前生效的 `acceptKey` / `regenKey` / `wordAccept` **动态拼出**，
+   * 改键后提示自动跟着变；语言跟随宿主界面语言。关掉即回到「说明只在设置页」。
+   */
+  showKeyHint: z.boolean().default(true).volatile(),
   /** 采纳建议的输入框快捷键（默认 Tab）。 */
   acceptKey: z.string().min(1).default('Tab').volatile(),
   /**
@@ -354,6 +361,8 @@ export interface PluginConfigValues {
   completionReasoningEffort: Volatile<string>;
   wordAccept: Volatile<boolean>;
   acceptKey: Volatile<string>;
+  /** #157：幽灵显示时浮一行键位提示（默认开）。 */
+  showKeyHint: Volatile<boolean>;
   // #127 重出。两键都进 `Volatile<...>`（`.volatile()` 把输出映射成引用，见本接口头部），
   // 与 `acceptKey` 同族 ⇒ 同时进 `generate.ts` 的 `EditableConfig`、两处 `readVolatile`
   // 与 `live-settings.ts` 的 `SETTING_SPECS`。**不照抄 `inheritSessionRoute` 的形状**：

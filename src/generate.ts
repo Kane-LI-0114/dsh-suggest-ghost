@@ -142,6 +142,8 @@ export interface EditableConfig {
   caretGlowEnabled?: Volatile<boolean> | boolean;
   /** 生成中的输入框呼吸光（V4，默认开）。 */
   boxGlowEnabled?: Volatile<boolean> | boolean;
+  /** #157：幽灵显示时浮一行键位提示（默认开）。纯客户端展示开关。 */
+  showKeyHint?: Volatile<boolean> | boolean;
   /** 重出开关（#127）。volatile：设置页要能改，且改了不必重启。 */
   regenEnabled?: Volatile<boolean> | boolean;
   /** 重出快捷键 spec（#127）。volatile，判据与 `acceptKey` 同套（空串丢弃回落默认）。 */
@@ -190,6 +192,8 @@ export type FlatConfig = Config & {
   caretGlowEnabled: boolean;
   /** 生成中的输入框呼吸光（V4，默认开）。 */
   boxGlowEnabled: boolean;
+  /** #157：幽灵显示时浮一行键位提示（默认开）。 */
+  showKeyHint: boolean;
   historyEnabled: boolean;
   historyCrossSession: boolean;
   historyMaxEntries: number;
@@ -222,6 +226,7 @@ export function flattenConfig(config: ResolvedPluginConfig): FlatConfig {
     // scripts/pending-indicator-smoke.mjs 逐处核对。
     caretGlowEnabled: readVolatile(config.caretGlowEnabled, false),
     boxGlowEnabled: readVolatile(config.boxGlowEnabled, false),
+    showKeyHint: readVolatile(config.showKeyHint, true),
     acceptKey: readVolatile(config.acceptKey, 'Tab'),
     historyEnabled: readVolatile(config.historyEnabled, true),
     historyCrossSession: readVolatile(config.historyCrossSession, false),

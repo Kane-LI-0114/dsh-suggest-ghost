@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### 新增
+
+- **幽灵文本出现时，输入框下方浮一行「当前键位」提示**（Gitea #157）。
+  此前快捷键说明只写在设置页的字段描述里（`acceptKey` / `regenKey` / `wordAccept` 三处），
+  **用户不点进设置就看不到**；而这三项都是可配置的，改过键的用户尤其容易忘了自己改成了什么。
+  现在幽灵真的画在屏幕上时（判据复用 `overlay.isPainted`，与绘制闸同源），于编辑器正下方浮一行小字：
+  `Tab 采纳 · → 逐词 · Esc 关闭`（`llm` 形态多一段 `Alt+G 换一条`）。
+  文案**由当前生效的设置动态拼出**：把 `acceptKey` 改成 `F2`，下一次显示就是 `F2 采纳`；语言跟随宿主界面语言。
+  **不是**把说明从设置页搬走——两处都在，设置页仍是完整说明。
+  三条形态判据各有对应行为差异：`→` 只在 `history` / `inline` 形态出现（`llm` 形态下裸 `→` 走原生光标移动，
+  写上去就是错的说明），且要求 `wordAccept` 开启；「换一条」只在 `llm` 形态且 `regenEnabled` 开启时出现。
+  实现选型：**独立节点**挂在 overlay 同一个父（`.grow`），不塞进 overlay——overlay 写死 `pointer-events:none`、
+  `align()` 又把宽度收窄成「行尾到行末」，且 `llm` 形态没有行尾锚点，三条任一条都让「挂在 overlay 里」不可行。
+  自愈复用 #152 那套判据（`isConnected` 而非引用比对）。新增开关 `showKeyHint`（默认**开**，关掉回到只看设置页）。
+  覆盖面如实记：**节点行为只在纯 Node 侧测了文案拼装**（`scripts/key-hint-smoke.mjs`，12 条，含两条变异自证：
+  去掉「llm 形态不出 →」判据 ⇒ 2 条红；把 `acceptKey` 硬编码成 `Tab` ⇒ 3 条红）；真宿主里的几何位置
+  （「输入框下方」这一条）**尚未做 GUI 取证**，记为遗留项。
+
 ## [0.10.0] - 2026-11-11
 
 ### 修复
