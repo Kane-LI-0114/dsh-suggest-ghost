@@ -238,16 +238,27 @@ run('两个键都有卡片字段且可写，并各自独立成条', () => {
   }
 });
 
-run('设置卡把这个分组标成「实验性」（与 dsh-later 的「高级语法」同形态）', () => {
-  // 默认关 + 标题挂徽章是**一套**口径：只改默认值不挂徽章，用户会以为功能没做；
-  // 只挂徽章默认开，就成了"拿用户当小白鼠"。两条必须同时在。
-  assert.match(card, /key: 'caretGlowEnabled'[\s\S]{0,400}?section: 'display'/, 'C1 不在 display 分组');
-  assert.match(card, /key: 'boxGlowEnabled'[\s\S]{0,400}?section: 'display'/, 'V4 不在 display 分组');
-  const sectionAt = card.indexOf('id="sgc-section-pending"');
-  assert.ok(sectionAt > 0, '找不到「生成中的提示」这一节');
-  assert.match(card.slice(sectionAt, sectionAt + 600), /sgc-beta/, '这一节标题后没有挂实验性徽章');
-  assert.match(card, /betaBadge:\s*'实验性'/, 'zh 文案里没有「实验性」');
-  assert.match(card, /betaBadge:\s*'Beta'/, 'en 文案里没有 Beta');
+run('两个光效进了「外观」分组，且各自文案里仍写着实验性', () => {
+  // ⚠️ 判据在 #157 之后改过一次，原因记录在此，免得下次有人"改回去"：
+  //
+  // 旧判据钉的是「C1/V4 在 `section: 'display'`，且那一节标题挂 `sgc-beta` 徽章」。
+  // 但 `section: 'display'` 那一节渲染出来的标题是「生成中的提示」，**不是外观**，
+  // 而键位提示（纯视觉、非实验性）也被塞进了「历史前缀补全」⇒ 用户按「显示/外观」
+  // 根本找不到它。改成 appearance 分组后，那一节同时装了非实验性的键位提示，
+  // **整节挂「实验性」徽章就不成立了**（会把键位提示也标成实验性）。
+  //
+  // ⇒ 现在断的是两件事：
+  //   1. 结构：两个光效与键位提示同属 appearance 分组；
+  //   2. 口径：两个光效的 hint 文案里**仍然逐字写着「实验性」**（默认关这一点也另有断言）。
+  // 徽章本身没删（betaBadge / betaBadgeAria 文案仍在，供别的实验性分组复用）。
+  assert.match(card, /key: 'caretGlowEnabled'[\s\S]{0,400}?section: 'appearance'/, 'C1 不在 appearance 分组');
+  assert.match(card, /key: 'boxGlowEnabled'[\s\S]{0,400}?section: 'appearance'/, 'V4 不在 appearance 分组');
+  assert.match(card, /key: 'showKeyHint'[\s\S]{0,600}?section: 'appearance'/, '键位提示不在 appearance 分组');
+  const c1 = card.slice(card.indexOf("key: 'caretGlowEnabled'"), card.indexOf("key: 'caretGlowEnabled'") + 500);
+  const v4 = card.slice(card.indexOf("key: 'boxGlowEnabled'"), card.indexOf("key: 'boxGlowEnabled'") + 500);
+  assert.match(c1, /实验性/, 'C1 文案里没写「实验性」⇒ 用户不知道这是实验性功能');
+  assert.match(v4, /实验性/, 'V4 文案里没写「实验性」⇒ 用户不知道这是实验性功能');
+  assert.match(card, /betaBadge:\s*'实验性'/, 'zh 文案里没有「实验性」（徽章仍要可供其它分组复用）');
   assert.match(card, /betaBadgeAria:/, '徽章缺 aria-label（读屏用户只听到一个孤立的词）');
 });
 

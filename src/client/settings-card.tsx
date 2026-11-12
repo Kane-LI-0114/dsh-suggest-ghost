@@ -87,7 +87,7 @@ export const GHOST_FIELDS: ReadonlyArray<{
       en: 'Pulse a soft glow around the input box while a suggestion is being generated. Experimental, off by default.',
     },
     kind: 'boolean',
-    section: 'display',
+    section: 'appearance',
     writable: true,
   },
   {
@@ -98,7 +98,7 @@ export const GHOST_FIELDS: ReadonlyArray<{
       en: 'Slowly shift the text cursor between two colors while generating. Experimental, off by default.',
     },
     kind: 'boolean',
-    section: 'display',
+    section: 'appearance',
     writable: true,
   },
   // —— LLM 下一条建议 ——
@@ -373,7 +373,9 @@ export const GHOST_FIELDS: ReadonlyArray<{
       en: 'While a suggestion is shown, a line at the top of the composer lists the live keys (it follows any shortcut you changed). Off = the explanation lives only in settings.',
     },
     kind: 'boolean',
-    section: 'history',
+    // 归「外观」而不是「历史前缀补全」：它是**纯视觉开关**，与补全逻辑无关；
+    // 放 history 下时用户按「显示/外观」找不到它（Gitea #157 的实机反馈）。
+    section: 'appearance',
     writable: true,
   },
   // —— 停顿续写 ——
@@ -483,7 +485,8 @@ const zhStrings = {
   configOnly: '策略字段：host 端未开放写入，请改 cordis.patch.yml',
   /** 显示设置 section（仅详情页显示） */
   sectionDisplay: '显示设置',
-  sectionPending: '生成中的提示',
+  /** 「外观」分组：纯视觉开关（两个光效 + 键位提示）。 */
+  sectionAppearance: '外观',
   /** 实验性徽章（与 dsh-later 的「高级语法」同一口径：默认关 + 标题挂徽章）。 */
   betaBadge: '实验性',
   betaBadgeAria: '实验性功能，行为可能随版本调整',
@@ -529,7 +532,7 @@ const enStrings: { [K in keyof typeof zhStrings]: (typeof zhStrings)[K] } = {
   readOnly: 'Not writable in this deployment (in-memory mode)',
   configOnly: 'Strategy field: not writable from the UI — edit cordis.patch.yml',
   sectionDisplay: 'Display',
-  sectionPending: 'While generating',
+  sectionAppearance: 'Appearance',
   betaBadge: 'Beta',
   betaBadgeAria: 'Beta feature; behaviour may change between versions',
   showInSettings: 'Show in settings',
@@ -1228,7 +1231,14 @@ export function SuggestGhostCard({ scope, locale, surface, modelCatalog, modelCa
   const historyFields = GHOST_FIELDS.filter(f => f.section === 'history');
   const inlineFields = GHOST_FIELDS.filter(f => f.section === 'inline');
   const languageFields = GHOST_FIELDS.filter(f => f.section === 'language');
-  const pendingFields = GHOST_FIELDS.filter(f => f.section === 'display');
+  /**
+   * 「外观」分组：**所有纯视觉开关**。
+   *
+   * 之前这些字段分散在两处且标题对不上：两个光效的 `section` 值是 `'display'`，
+   * 但渲染出来的标题叫「生成中的提示」；键位提示躲在「历史前缀补全」下。
+   * 用户找不到（#157 实机反馈）⇒ 统一成 appearance，标题「外观」。
+   */
+  const appearanceFields = GHOST_FIELDS.filter(f => f.section === 'appearance');
 
   /** Section 布局：grid = 两列并排（适合短字段），stack = 单列堆叠。 */
   const SECTION_LAYOUT: Record<string, 'grid' | 'stack'> = {
@@ -1236,8 +1246,8 @@ export function SuggestGhostCard({ scope, locale, surface, modelCatalog, modelCa
     history: 'stack',
     inline: 'stack',
     language: 'grid',
-    // 两个开关都带一句话说明 ⇒ 单列堆叠，别挤成两栏（挤了说明会折成三行）。
-    display: 'stack',
+    // 外观组的开关都带一句话说明 ⇒ 单列堆叠，别挤成两栏（挤了说明会折成三行）。
+    appearance: 'stack',
   };
 
   return (
@@ -1282,14 +1292,9 @@ export function SuggestGhostCard({ scope, locale, surface, modelCatalog, modelCa
         <h3 className="sgc-section-heading" id="sgc-section-inline">{t.sectionInline}</h3>
         <div className={SECTION_LAYOUT.inline === 'grid' ? 'sgc-section-fields sgc-section-fieldsGrid' : 'sgc-section-fields'}>{renderFieldRun(inlineFields)}</div>
       </section>
-      <section className="sgc-section" aria-labelledby="sgc-section-pending">
-        <h3 className="sgc-section-heading" id="sgc-section-pending">
-          {t.sectionPending}
-          {/* 实验性徽章：与 dsh-later 的「高级语法」同一形态（标题后一个胶囊），
-              aria-label 说明"行为可能随版本调整"，不让读屏用户只听到一个孤立的词。 */}
-          <span className="sgc-beta" aria-label={t.betaBadgeAria}>{t.betaBadge}</span>
-        </h3>
-        <div className={SECTION_LAYOUT.display === 'grid' ? 'sgc-section-fields sgc-section-fieldsGrid' : 'sgc-section-fields'}>{renderFieldRun(pendingFields)}</div>
+      <section className="sgc-section" aria-labelledby="sgc-section-appearance">
+        <h3 className="sgc-section-heading" id="sgc-section-appearance">{t.sectionAppearance}</h3>
+        <div className={SECTION_LAYOUT.appearance === 'grid' ? 'sgc-section-fields sgc-section-fieldsGrid' : 'sgc-section-fields'}>{renderFieldRun(appearanceFields)}</div>
       </section>
       <section className="sgc-section" aria-labelledby="sgc-section-language">
         <h3 className="sgc-section-heading" id="sgc-section-language">{t.sectionLanguage}</h3>
