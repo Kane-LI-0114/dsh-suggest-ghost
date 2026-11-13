@@ -160,7 +160,7 @@ let officialCatalogLoader: (() => void) | null = null;
 /** 目录加载/刷新后通知卡片重渲染（`store.subscribe` 的转发器）；未挂上时为 null。 */
 let officialCatalogListener: (() => void) | null = null;
 import type { PluginSettingsScope } from './settings-scope.js';
-import type { LocaleFaceLike } from './useGhostT.js';
+import { resolveGhostLang, type GhostLang, type LocaleFaceLike } from './ghost-lang.js';
 import { KeyHintBarSlot, type KeyHintInput } from './key-hint-bar.js';
 
 /**
@@ -1325,14 +1325,13 @@ export interface ScopeSnapshot {
  * 设置页的导航文案。
  *
  * 宿主每次投影 `settings.section` 的 `label` 时都会重读这个 thunk，所以语言
- * 切换后无需重新注册 section。locale 服务缺失（旧宿主组合）时回退中文，与
- * useGhostT 的降级行为一致。
+ * 切换后无需重新注册 section。语言的收窄**复用 `resolveGhostLang`**，不在这里
+ * 抄第二份判据：locale 服务缺席（旧宿主组合）仍是中文，宿主其余各门语言
+ * （ja/es/fr/de/ru/pt）按内核自身的 `fallback: "en"` 落英文。
  * @param locale - 宿主 locale 服务；可为 undefined。
  */
-const sectionLabel = (locale: LocaleFaceLike | undefined): string => {
-  const active = locale === undefined ? 'zh' : locale.getSnapshot().active;
-  return active === 'en' ? SECTION_LABELS.en : SECTION_LABELS.zh;
-};
+const sectionLabel = (locale: LocaleFaceLike | undefined): string =>
+  SECTION_LABELS[resolveGhostLang(locale?.getSnapshot().active)];
 
 function applyInner(ctx: Context): void {
   // rc.7：所需核心服务已由 `inject` 声明，fiber 激活门控保证可用；ctx.get 可选读取。
@@ -1395,8 +1394,8 @@ function applyBody(ctx: Context): void {
    * 注释解释了为什么必须那样排），而 render 只在调用期求值，thunk 天然避开 TDZ；
    * 顺带拿到「语言切换后下一次显示就是新语言」的行为。
    */
-  const activeLang = (): 'zh' | 'en' =>
-    ((ctx.get('locale') as LocaleFaceLike | undefined)?.getSnapshot().active === 'en' ? 'en' : 'zh');
+  const activeLang = (): GhostLang =>
+    resolveGhostLang((ctx.get('locale') as LocaleFaceLike | undefined)?.getSnapshot().active);
   let lastSessionId: string | undefined;
 
   // ── localStorage 持久化：冷启动立即恢复历史/热度/建议，避免等待 host RPC ──

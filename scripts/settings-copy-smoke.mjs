@@ -13,8 +13,9 @@
 //
 // 用法：node scripts/settings-copy-smoke.mjs
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { findHardcodedCopy } from './copy-source-check.mjs';
 
 const SRC = readFileSync(join(process.cwd(), 'src', 'client', 'settings-card.tsx'), 'utf8');
 const start = SRC.indexOf('export const GHOST_FIELDS');
@@ -72,6 +73,56 @@ check('英文说明长度 ≤ 200', () => {
 check('没有空说明', () => {
   assert.ok(zh.every((s) => s.trim() !== ''), '存在空的中文说明');
   assert.ok(en.every((s) => s.trim() !== ''), '存在空的英文说明');
+});
+
+// ─── 渲染路径里不许有硬编码中文 ──────────────────────────────────────────
+// 用户可见文案只有两条合法来源：`GHOST_FIELDS` 的 `{ zh, en }` 双值，和
+// `zhStrings`/`enStrings` 字典（en 由映射类型锁键集）。写在 JSX 里的中文**没有任何
+// 测试能拦住**——类型对、渲染对、中文界面下看甚至是对的，只有切了语言才露。
+// 掩码式扫描（剥注释 → 掩字典块 → 掩双语字面量 → 剩下的 CJK 才算违规）在
+// `scripts/copy-source-check.mjs`，那里记录了每一步在消哪一类假阳性。
+// 覆盖面是**整个 src/client/**，不是只看设置卡片：键位提示、导航条目名同样是用户界面。
+// 放行表：每条**必须写理由**，理由是「这不是界面文案」或「这已经是双语的第 ③ 种写法」。
+// 表里没有的中文 ⇒ 红。加一条放行等于认一次「这不是文案」，所以理由要能被下一个人反驳。
+const COPY_ALLOW = [
+  // ③ 按 lang 分支的拼装函数：zh 与 en 各写一份，等价于 { zh, en } 双值。
+  { file: 'key-hint-text.ts', re: /parts\.push|const parts = /, why: 'keyHintText 的 zh 分支（同函数上方就是 en 分支）' },
+  // 非 UI 文本：给模型看的工具参数说明，不进界面。
+  { file: 'stream-ghost.ts', re: /^\s*description:/, why: 'typert 工具参数的 description，读者是模型不是人' },
+  // 非 UI 文本：诊断串，出现在 `｜目录 …` 里，是**工程读数**而非用户文案；
+  // 真要双语化得先决定它该不该出现在用户界面（见放行表下方第二条 check）。
+  { file: 'index.ts', re: /officialCatalogDiag = |console\.warn\(/, why: '目录诊断/console 读数，非界面文案' },
+];
+
+check('src/client/** 无硬编码中文文案（必须走 { zh, en }、字典或 lang 分支）', () => {
+  const dir = join('src', 'client');
+  const offenders = [];
+  for (const name of readdirSync(dir)) {
+    if (!/\.(ts|tsx)$/.test(name)) continue;
+    const allow = COPY_ALLOW.filter((a) => a.file === name).map((a) => ({ re: a.re }));
+    const hits = findHardcodedCopy(readFileSync(join(dir, name), 'utf8'), allow);
+    if (hits.length > 0) offenders.push(`${name}\n        ${hits.join('\n        ')}`);
+  }
+  assert.deepEqual(offenders, [], `以下中文文案没走合法来源，切走语言就会露：\n      ${offenders.join('\n      ')}`);
+});
+
+// 放行表不许烂掉：条目一旦不再命中任何行（文案被双语化了、或文件改名了），
+// 留着它就等于给未来的中文文案预先开了后门 ⇒ 红。
+check('放行表没有空转条目', () => {
+  const dir = join('src', 'client');
+  const idle = [];
+  for (const a of COPY_ALLOW) {
+    const file = join(dir, a.file);
+    let exists = true;
+    try { readFileSync(file, 'utf8'); } catch { exists = false; }
+    if (!exists) { idle.push(`${a.file}（文件不存在）`); continue; }
+    const without = findHardcodedCopy(readFileSync(file, 'utf8'), []);
+    // 命中项带 `行号: ` 前缀，而放行正则（如 `^\s*description:`）是**对着源码行**写的
+    // ⇒ 必须先把前缀摘掉再比，否则条目永远"空转"，闸就会逼人把正则写歪。
+    const matched = without.filter((h) => a.re.test(h.replace(/^\d+:\s*/, '')));
+    if (matched.length === 0) idle.push(`${a.file}: ${a.why}`);
+  }
+  assert.deepEqual(idle, [], `放行条目已空转 ⇒ 删掉它（留着就是后门）：\n      ${idle.join('\n      ')}`);
 });
 
 console.log(`\n${failed === 0 ? '✅' : '❌'} settings-copy-smoke: ${failed === 0 ? '设置页文案是用户视角' : `${failed} 条不合格`}`);

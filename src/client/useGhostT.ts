@@ -5,22 +5,16 @@
  * 服务：`getSnapshot()` 返回携带 `active`/`revision` 的不可变快照，
  * `subscribe(fn)` 返回退订函数。本 hook 以 `useSyncExternalStore` 订阅其
  * active locale，宿主「设置 → General → Language」切换时组件无刷新重渲染。
- * locale 服务缺失（旧宿主组合）或 id 未收录时回退中文，行为与改造前一致。
- * 采用最小结构化接口（LocaleFaceLike）而非包类型，保持零运行时依赖。
+ *
+ * 语言的**收窄判据不在本文件**，在 `ghost-lang.ts`（那份判据要能被 strip-types
+ * 冒烟直载，而本文件引了 react）。宿主 0.2.x 起注册的语言不止中英，
+ * 非中文各门一律落英文 ⇒ 详见 `resolveGhostLang` 的注释。
  * @module dsh-suggest-ghost/client/useGhostT
  */
 import { useCallback, useSyncExternalStore } from 'react';
+import { resolveGhostLang, type GhostLang, type LocaleFaceLike } from './ghost-lang.js';
 
-/** 宿主 locale 服务的结构化子集（避免引入运行时包类型依赖）。 */
-export interface LocaleFaceLike {
-  /** 当前不可变快照（变更前引用稳定；`active` 为语言 id）。 */
-  getSnapshot(): { active: string; revision: number };
-  /** 订阅快照变化；返回退订函数。 */
-  subscribe(fn: () => void): () => void;
-}
-
-/** 本插件支持的界面语言 id（zh 为源语言，en 为翻译目标）。 */
-export type GhostLang = 'zh' | 'en';
+export type { GhostLang, LocaleFaceLike } from './ghost-lang.js';
 
 const noopSubscribe = (): (() => void) => () => {};
 
@@ -34,12 +28,12 @@ export function useGhostT(locale: LocaleFaceLike | undefined): GhostLang {
       locale === undefined ? noopSubscribe() : locale.subscribe(onStoreChange),
     [locale],
   );
+  // locale 服务缺席 ⇒ undefined（= 旧宿主 ⇒ 中文），而不是伪造一个 'zh' 读数：
+  // 「缺席」与「宿主说 zh」是两件事，压在一起下一句 `startsWith('zh')` 就分不出它们了。
   const getActive = useCallback(
-    () => (locale === undefined ? 'zh' : locale.getSnapshot().active),
+    () => (locale === undefined ? undefined : locale.getSnapshot().active),
     [locale],
   );
   const active = useSyncExternalStore(subscribe, getActive, getActive);
-  if (active === 'en') return 'en';
-  if (active?.startsWith('zh')) return 'zh';
-  return 'zh';
+  return resolveGhostLang(active);
 }

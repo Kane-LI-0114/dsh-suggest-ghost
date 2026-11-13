@@ -63,7 +63,7 @@ After installing, restart dsh web and hard-refresh the page with Ctrl+Shift+R. W
 ## Configuration
 
 All settings live in the **Suggest ghost** card in Settings → Plugins and take effect immediately after saving:
-card copy (field labels/hints, buttons, badges) follows the host DSH UI language (中文 / English) and updates in real time when the language is switched in Settings, without a refresh; hosts without a locale service fall back to Chinese.
+card copy (field labels/hints, buttons, badges) follows the host DSH UI language. This plugin ships **Chinese and English** copy only; the host's other UI languages (Japanese, Spanish, French, German, Russian, Portuguese) **resolve to English** — the same direction the host itself declares for those locales via `fallback: "en"`, so a Japanese interface never gets handed a Chinese card. Hosts without a locale service still fall back to Chinese. Updates in real time when the language is switched in Settings, without a refresh.
 
 | Group | Fields |
 |---|---|
