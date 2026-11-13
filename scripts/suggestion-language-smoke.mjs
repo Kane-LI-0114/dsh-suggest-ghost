@@ -9,6 +9,10 @@
  *     的注入消息（time-context, skill-catalog 等），否则英文注入会污染语言判定。
  *     本测试验证纯函数侧的行为，注入过滤在 generate.ts 的集成测试里覆盖。
  *
+ * 第 24-28 组钉的是**日文**：假名（kana）从 CJK 桶里拆出来独立成桶之后，
+ * `auto` 才第一次能产出 `日本語`（拆桶前日文一路命中 `简体中文`，`LANGUAGE_NAMES` 里的
+ * `ja` 在 auto 下是死代码）。第 26/28 组是这条判据的**上界**，不是待修 bug。
+ *
  * 以及 #125 修复的性质（第 18-22 组）：两处**零证据早退**不得携带自己的语言结论——
  * 新会话（`buildTranscript` 在 `lastTurn === 0` 返回 undefined ⇒ `evidencePairs ?? []`）
  * 拿到空数组时，UI 先验必须成为决定性依据，`uiLocaleWeight` 在这一支不参与。
@@ -290,5 +294,70 @@ const pair = (role, text) => ({ role, text });
   assert.equal(result, '简体中文', `有中文真人证据 + zh 仍应返回简体中文，实际: ${result}`);
 }
 
-console.log('✅ suggestionLanguage 23 组用例全部通过');
+// ─── 24–28. 日文：假名独立成桶之后 auto 才选得出 日本語 ─────────────────────
+// 拆桶前这些全部返回 简体中文（假名与汉字合在同一个 cjkScore 里，只命中中文分支），
+// 于是 LANGUAGE_NAMES 里的 `ja: '日本語'` 在 auto 模式下是死代码。宿主界面语言
+// 注册了 ja 之后，这条不是"多支持一门语言"，而是"停止把日文当中文"。
+
+// ─── 24. 常规日文（汉字 + 假名混排），UI locale 英文 → 日本語 ──────────────
+{
+  const pairs = [
+    pair('user', 'この認証関数のテストケースを追加してくれますか。まずバリデーションを入れて、その後に実行したいです。'),
+    pair('assistant', '承知しました。まずバリデーションを追加します。'),
+  ];
+  const result = suggestionLanguage(pairs, 'en');
+  assert.equal(result, '日本語', `日文混排应返回日本語（旧实现返回简体中文），实际: ${result}`);
+}
+
+// ─── 25. 片假名为主的技术句，无任何汉字 → 日本語 ──────────────────────────
+{
+  const pairs = [
+    pair('user', 'このサーバーのデータベスを再起動して、ログを確認してください。'),
+    pair('user', '設定を変更したら、アプリがクラッシュしました。'),
+  ];
+  const result = suggestionLanguage(pairs, 'en');
+  assert.equal(result, '日本語', `片假名句应返回日本語，实际: ${result}`);
+}
+
+// ─── 26. 反向守卫：长中文提示词里粘一句日文引文 → 仍判简体中文 ─────────────
+// `kanaScore >= cjkScore * 0.25` 那个下限就是为这一条存在的。没有它，一条带日文
+// 报错摘录的中文任务提示会被整体判成日文，比原来的错更难查（用户写的是中文）。
+{
+  const pairs = [
+    pair('user', '帮我看下这个仓库里的登录重试逻辑，中文回答。涉及的模块包括会话投影、设置页写入与幽灵文本渲染，'
+      + '我需要你逐个函数读源码并给出行号证据，不要改文件。这个任务的验收标准是每一条结论都能回到具体行号上，'
+      + '并且要区分开实测与推断。日文那段报错摘录是这样的：サーバーが応答しません。時間をおいて再度お試しください。'
+      + '摘录只是素材，我的问题还是中文的，请顺着上面那段继续分析重试次数的上限是从哪里读出来的。'),
+    pair('assistant', '好的，我先读一下相关模块的入口。'),
+  ];
+  const result = suggestionLanguage(pairs, 'zh', 100);
+  assert.equal(result, '简体中文', `中文主导 + 日文摘录仍应判简体中文，实际: ${result}`);
+}
+
+// ─── 27. 界面语言先验不许把日文压成中文（日文判定早于先验加成）─────────────
+// 假名是中文明文里不出现的文字系统 ⇒ 「有足量假名」是排他证据，不是"中文侧分数不够高"。
+// 这条钉住顺序：日文分支在 `uiLocaleWeight` 加成**之前**返回，加多少权重都不该翻盘。
+{
+  const pairs = [
+    pair('user', 'この関数の引数チェックを強化して、ついでにテストも追加してくれますか。'),
+    pair('assistant', '了解です。では実装します。'),
+    pair('user', 'はい、その方針でお願いします。まずはバリデーションから。'),
+  ];
+  const result = suggestionLanguage(pairs, 'zh', 100);
+  assert.equal(result, '日本語', `zh 界面先验不该压制真人假名证据，实际: ${result}`);
+  const maxed = suggestionLanguage(pairs, 'zh', 500);
+  assert.equal(maxed, '日本語', `uiLocaleWeight 提到 500 也不该把日文判成中文，实际: ${maxed}`);
+}
+
+// ─── 28. 如实记录边界：汉字-only 的日文句仍落简体中文 ───────────────────────
+// 没有假名就没有排他证据，汉字是中日共用的，纯汉字句在文字系统层面无法区分两者。
+// 这条**不是**待修的 bug，是把判据的上界写清楚：要精确日文，出路是显式设 `languageMode: 'ja'`。
+// 断言的是**当前行为**，改实现的人看到这条红就该意识到自己在动一条被记录过的边界。
+{
+  const pairs = [pair('user', '会議資料確認作業本日中')];  // 全汉字，一个假名都没有
+  const result = suggestionLanguage(pairs, 'en');
+  assert.equal(result, '简体中文', `汉字-only 无假名 ⇒ 落中文（已知边界，见本组注释），实际: ${result}`);
+}
+
+console.log('✅ suggestionLanguage 28 组用例全部通过');
 

@@ -525,6 +525,18 @@ const zhStrings = {
   hotClearConfirm: '确认清空？',
   hotMeta: (total: number, shown: number): string =>
     total > shown ? `共 ${total} 条，显示热度最高的 ${shown} 条` : `共 ${total} 条`,
+  // —— 目录型下拉框的占位项与档位诊断 ——
+  // 这七条此前是**硬编码中文写在渲染路径里**的，没走字典：英文界面下卡片其余部分
+  // 都是英文，唯独这几个下拉项/占位符露出中文。宿主注册了 ja 等六门之后，
+  // 回退方向改成英文（`ghost-lang.ts`）把这类残留放大成肉眼可见的破洞，故一并收编。
+  catalogDeployDefault: '（跟随部署默认）',
+  catalogEffortOmit: '（不传，沿用模型默认）',
+  catalogPickProvider: '（先选 provider）',
+  effortDefaultMark: '（默认）',
+  effortNotInCatalog: '（不在当前目录里）',
+  effortCatalogStale: '（宿主未提供档位目录：重启一次后本栏会变下拉）',
+  effortCatalogEmpty: '（该模型未声明推理档位，可手填）',
+  catalogDiagTail: (diag: string): string => `｜目录 ${diag}`,
 } as const;
 
 /** en 字典：映射类型约束与 zh 键集完全一致（缺键/多键均为编译期错误）。 */
@@ -565,6 +577,14 @@ const enStrings: { [K in keyof typeof zhStrings]: (typeof zhStrings)[K] } = {
   hotClearConfirm: 'Confirm clear?',
   hotMeta: (total: number, shown: number): string =>
     total > shown ? `${total} total, showing the top ${shown} by heat` : `${total} total`,
+  catalogDeployDefault: '(follow the deployment default)',
+  catalogEffortOmit: '(omit; use the model default)',
+  catalogPickProvider: '(pick a provider first)',
+  effortDefaultMark: '(default)',
+  effortNotInCatalog: '(not in the current catalog)',
+  effortCatalogStale: '(no effort catalog from the host — this field becomes a dropdown after a restart)',
+  effortCatalogEmpty: '(this model declares no reasoning efforts; you can type one)',
+  catalogDiagTail: (diag: string): string => ` | catalog ${diag}`,
 };
 
 /** 单语言 chrome 文案字典类型（zh/en 通用；值随 zh 源字典，含函数成员）。 */
@@ -1044,11 +1064,11 @@ export function SuggestGhostCard({ scope, locale, surface, modelCatalog, modelCa
     const out = rows.map((r) => {
       const base = r.name === r.id ? r.id : `${r.id} — ${r.name}`;
       const desc = typeof r.description === 'string' ? ` · ${r.description}` : '';
-      const mark = defaultEffort === r.id ? '（默认）' : '';
+      const mark = defaultEffort === r.id ? t.effortDefaultMark : '';
       return { value: r.id, label: `${base}${desc}${mark}` };
     });;
     if (current !== '' && !out.some(o => o.value === current)) {
-      out.unshift({ value: current, label: `${current}（不在当前目录里）` });
+      out.unshift({ value: current, label: `${current}${t.effortNotInCatalog}` });
     }
     return out;
   };
@@ -1139,10 +1159,10 @@ export function SuggestGhostCard({ scope, locale, surface, modelCatalog, modelCa
         onChange={e => setField(f.key, e.target.value)}
       >
         <option value="">{(f.catalog ?? 'providers') === 'providers'
-          ? '（跟随部署默认）'
+          ? t.catalogDeployDefault
           : (f.catalog ?? '') === 'efforts'
-            ? '（不传，沿用模型默认）'
-            : ((providerValue ?? '').trim() === '' ? '（先选 provider）' : '（跟随部署默认）')}</option>
+            ? t.catalogEffortOmit
+            : ((providerValue ?? '').trim() === '' ? t.catalogPickProvider : t.catalogDeployDefault)}</option>
         {catalogOptions(f.catalog ?? 'providers', fieldValue(f.key)).map(opt => (
           <option key={opt.value} value={opt.value}>{opt.label}</option>
         ))}
@@ -1165,9 +1185,9 @@ export function SuggestGhostCard({ scope, locale, surface, modelCatalog, modelCa
         placeholder={(() => {
           if (f.catalog !== 'efforts') return '';
           const diag = typeof modelCatalogDiag === 'function' ? modelCatalogDiag() : null;
-          const tail = diag === null || diag === undefined ? '' : `｜目录 ${diag}`;
-          if (effortFallback === 'stale') return `（宿主未提供档位目录：重启一次后本栏会变下拉）${tail}`;
-          if (effortFallback === 'empty') return `（该模型未声明推理档位，可手填）${tail}`;
+          const tail = diag === null || diag === undefined ? '' : t.catalogDiagTail(diag);
+          if (effortFallback === 'stale') return `${t.effortCatalogStale}${tail}`;
+          if (effortFallback === 'empty') return `${t.effortCatalogEmpty}${tail}`;
           return '';
         })()}
         id={fieldId}
