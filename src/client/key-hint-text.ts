@@ -12,7 +12,14 @@
 export interface KeyHintInput {
   /** 幽灵形态。`llm` 没有行尾锚点，且 `→` 在该形态下是原生光标移动。 */
   kind: 'llm' | 'history' | 'inline';
-  /** 当前生效的采纳快捷键（展示用，已按用户设置格式化，如 `Tab` / `F2` / `Ctrl+Enter`）。 */
+  /**
+   * 当前**实际生效**的采纳快捷键，展示用（如 `Tab` / `F2` / `Ctrl+Enter`）。
+   *
+   * ⚠️ 调用方必须传 `acceptKeyFor()`（`accept-key.ts`）的返回值，**不要**直接把设置项
+   * `acceptKey` 传进来（Gitea #167）：设置项只对 `llm` 形态生效，`history` / `inline`
+   * 固定用 `DEFAULT_ACCEPT_KEY`。传错的话这行字会承诺一个按下去没反应的键 ——
+   * 「显示的键 == 实际生效的键」由 `scripts/accept-key-smoke.mjs` 钉住。
+   */
   acceptKey: string;
   /** 当前生效的「换一条」快捷键（仅 `llm` 形态且重出开启时展示）。 */
   regenKey?: string;
@@ -32,6 +39,12 @@ export interface KeyHintInput {
  *    光标移动（见 `index.ts` 的逐词采纳分支条件），写上去就是错的说明；
  *  - `→` 还要求 `wordAccept` 开启（用户关掉后就不再成立）；
  *  - 「换一条」只在 `llm` 形态且 `regenEnabled` 开启时出现。
+ *
+ * **采纳键在三形态下的口径（Gitea #167）**：`llm` 形态的键来自设置项 `acceptKey`，
+ * `history` / `inline` 固定 `Tab` —— 这个差异**不在本文件判定**，由 `acceptKeyFor()`
+ * 决定后放在 {@link KeyHintInput.acceptKey} 里传进来。本文件只负责把它显示出来，
+ * 所以提示行永远写「真按得动的那个键」，而设置页的 hint 负责讲清「设置项管到哪」。
+ * 两处口径同一来源（`accept-key.ts`），不会各说各话。
  *
  * @param input - 当前形态与设置。
  * @returns 提示行文本；分隔符用 `·`（与同类插件一致的密集写法）。
