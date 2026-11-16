@@ -17,7 +17,7 @@ All notable changes to this project will be documented in this file.
   写上去就是错的说明），且要求 `wordAccept` 开启；「换一条」只在 `llm` 形态且 `regenEnabled` 开启时出现。
   实现选型：**独立节点**挂在 overlay 同一个父（`.grow`），不塞进 overlay——overlay 写死 `pointer-events:none`、
   `align()` 又把宽度收窄成「行尾到行末」，且 `llm` 形态没有行尾锚点，三条任一条都让「挂在 overlay 里」不可行。
-  自愈复用 #152 那套判据（`isConnected` 而非引用比对）。新增开关 `showKeyHint`（默认**开**，关掉回到只看设置页）。
+  自愈复用 #156 那套判据（`isConnected` 而非引用比对）。新增开关 `showKeyHint`（默认**开**，关掉回到只看设置页）。
   覆盖面如实记：**节点行为只在纯 Node 侧测了文案拼装**（`scripts/key-hint-smoke.mjs`，12 条，含两条变异自证：
   去掉「llm 形态不出 →」判据 ⇒ 2 条红；把 `acceptKey` 硬编码成 `Tab` ⇒ 3 条红）；真宿主里的几何位置
   （「输入框下方」这一条）**尚未做 GUI 取证**，记为遗留项。

@@ -50,6 +50,9 @@ import {
   type FrameHint,
   type FrameLedger,
 } from './accept-guard.js';
+// Gitea #166 方案 B1：采纳前校验「浮层画的那句」与「要写入的那句」同源。
+import { acceptSourceVerdict } from './accept-source.js';
+import { shouldYieldKey } from './yield-key.js';
 import { alignCompletion, decideCompletionReuse, decideLlmForm, hasUserDraft } from './completion-align.js';
 import { buildOpsPayload, createSeqSource } from './ops-envelope.js';
 import { nextAcceptChunk } from './chunk.js';
@@ -1206,6 +1209,32 @@ class GhostOverlay {
     // 长度单调已由判据保证（同一次生成的文本只会长），这里直接改尾巴那一个节点。
     holder.textContent = next.suffixText;
     return true;
+  }
+
+  /**
+   * 浮层**此刻真的画在屏幕上**的那段文本（#166 方案 B1 的判据输入）。
+   *
+   * ⚠️ 这不是 `this.current` 的投影，而是**从节点上读回来**的：`current` 是内部状态，
+   * 采纳闸若拿它比 `accepted`，那两值都由同一份 content 推导，必然相等 —— 判据就成了
+   * 同义反复（实测：把屏幕上那句改掉之后 `current.text` 仍是槽里那条，闸放行、
+   * 草稿照样被整段覆盖）。读回来只碰本插件自己的节点，不是宿主 DOM 遍历。
+   *
+   * 口径与 {@link buildText} / {@link applyGrowthText} 的写入口一致：
+   *  - `llm`：整段文本写在节点自身的 `textContent` 上；
+   *  - `history` / `inline`：只把**后缀**装进第一枚子节点。
+   */
+  get paintedText(): string | null {
+    // ⚠️ 判据只认**节点上真的写着什么**，不叠加 `painted` / `isConnected` 这类状态位：
+    // 采纳那一刻节点可能恰好处在「被宿主摘走 → 下一帧 ensureMounted 挂回」的缝里，
+    // 而屏幕上画的是哪句与本节点此刻有没有挂上是两件事（#166 的取证就踩过这个坑：
+    // 把 `isPainted` 叠进来之后，浮层自检不过的主体上「屏幕文本」恒为 null，
+    // 采纳闸一律判 not-painted —— 那不是修好，是把原来的采纳一起关掉了）。
+    //
+    // 「没画」由调用方用 `overlay.isPainted` 与这里返回的空串/`null` 分别表达，
+    // 判定本体（accept-source.ts）只认文本。
+    if (this.current !== null && this.current.kind === 'llm') return this.el.textContent ?? '';
+    const holder = this.el.firstElementChild;
+    return holder === null ? '' : (holder.textContent ?? '');
   }
 
   /** 屏幕上是否正有一枚「靠增长快路径维持」的幽灵（错峰补渲染据此让路）。 */
@@ -2901,8 +2930,31 @@ function applyBody(ctx: Context): void {
     applySettings();
   }
 
-  /** Tab（或配置键）整条采纳；幽灵显示时裸 → 逐词采纳。 */
+  /**
+   * Tab（或配置键）整条采纳；幽灵显示时裸 → 逐词采纳。
+   *
+   * ## 按键所有权（Gitea #166 方案 A）
+   *
+   * 本处理器注册在**冒泡阶段**（见下方的 `addEventListener`），不是 window 捕获。
+   * 语义因此从「**Tab 永远采纳**」降级为「**没有别人认领 Tab 时才采纳**」：
+   *
+   *  - 冒泡阶段意味着宿主 composer 与其它插件的 target/bubble 处理器**先跑**；
+   *    任一方对 Tab/`→` 调过 `preventDefault()`（弹层确认、候选采纳、插入制表符…），
+   *    这里第一句 `defaultPrevented` 就 return——不写草稿、不 stopPropagation、
+   *    也不代它 preventDefault（那个键归它，默认动作由它决定）。
+   *  - 代价（如实记）：若其它插件在 **window 捕获**阶段抢跑，本改动不解决它们的抢占
+   *    ——那是它们不守 `defaultPrevented` 契约，不该由本插件的捕获来对冲（#166 方案 A）。
+   *  - 反向风险：宿主 composer 自己在**冒泡**里 `stopPropagation()` ⇒ 本处理器拿不到事件
+   *    ⇒ 采纳彻底失效。这一条是迁移前必须实测定量的东西，证据见
+   *    `scripts/tab-ownership-smoke.mjs` 与 PR 描述。
+   *
+   * composition 事件仍走捕获（`:3180` 那条成文理由只对 composition 成立），见注册处。
+   */
   const onKeyDown = (event: KeyboardEvent): void => {
+    // ── #166 让路优先 ────────────────────────────────────────────────────────
+    // 必须排在最前：放在 `isComposing`/`shown` 之后也"能用"，但那会让一次别人已认领
+    // 的按键走进下面的焦点判定，读起来像本插件还在处理它。先声明立场再谈条件。
+    if (shouldYieldKey(event)) return;
     if (event.isComposing) return;
     if (shown === null) return;
     // 焦点必须在会话输入框内（textarea 或 0.1.2 contenteditable composer）。
@@ -2951,6 +3003,35 @@ function applyBody(ctx: Context): void {
         return;
       }
       traceClear('accept-gate-tab', null);
+      // ── #166 方案 B1：同源闸（屏幕上的那句 vs 要写入的那句）──────────────────
+      // 排在帧闸之后、`preventDefault` 与 CAS **之前**，理由与 #38 那条一模一样：
+      // 判据不通过时这一下按键归回浏览器（不吞键、不写字），比「按了没反应」诚实。
+      //
+      // 它拦的场景是 #166 的正体：浮层画的 X 与槽里的 content Y 不是同一份时（第三方
+      // 输入预测插件的候选被本插件整段覆盖、`overlay.current` 与 `shown` 错帧、自检
+      // 之后又换了内容……），采纳 Y 就是把用户没看见的句子写进输入框。判据本体在
+      // `accept-source.ts`（纯逻辑、零 DOM）；这里只负责在同一时点取两份值。
+      //
+      // ⚠️ 两条值必须来自**两条独立的路径**：`accepted` 由 `content` + `base.draft`
+      // 推导，而「画的那句」从**节点上读回来**（`overlay.paintedText`）。拿 `shown.content`
+      // 去比就是同义反复 —— 那是本站真踩过的一次（见 `paintedText` 的注释）。
+      const accepted = buildFullAccept(content, base.draft);
+      const source = acceptSourceVerdict({
+        // ⚠️ 取**节点上真画出来的那段**（`paintedText`），不是内部状态 `shown.content`：
+        // 后者与 `accepted` 同源推导，拿它比等于同义反复（#166 B1 的本意是校验
+        // 「屏幕上的那句是不是我要写的那句」）。
+        paintedText: overlay.paintedText,
+        paintedContent: shown.content,
+        accepted,
+      });
+      if (!source.allow) {
+        traceOnce('tab-abandon', source.reason ?? 'unknown',
+          ` kind=${content.kind} paintedChars=${source.paintedChars}`
+          + ` acceptedChars=${source.acceptedChars} draftChars=${base.draft.length}`
+          + ` ${frameHintFields(content.frame)}`);
+        return;
+      }
+      traceClear('tab-abandon', null);
       event.preventDefault();
       event.stopPropagation();
       if (bound !== null) {
@@ -2965,7 +3046,7 @@ function applyBody(ctx: Context): void {
         // 等值，判据见 accept-guard.ts）。一旦漂移，说明用户在这两步之间又打
         // 了字——本次采纳**整段放弃**，一个字符都不写，新输入原样留在草稿里；
         // 幽灵照旧收掉（下一次 render 会按新草稿重新出建议）。
-        const accepted = buildFullAccept(content, base.draft);
+        // `accepted` 已在同源闸之前算好（同一个 `base.draft`，逐字等价）。
         const input = bound.input;
         const outcome = commitDraftIfPristine(
           base,
@@ -3019,9 +3100,27 @@ function applyBody(ctx: Context): void {
       if (!full.startsWith(matchBase) || matchBase.length >= full.length) return;
       const chunk = nextAcceptChunk(full.slice(matchBase.length));
       if (chunk === '') return;
+      // ── #166 方案 B1：逐词路径同一条同源闸 ──────────────────────────────────
+      // 同一个道理，且这一支的**新增字符**（`chunk`）同样可能来自一条屏幕上看不见的
+      // 后缀。判据与整条采纳共用 `acceptSourceVerdict`（一处判据，禁止两份拼写）；
+      // `buildWordAccept(...)` 的结果必然以 `full` 收尾，所以通过闸的一帧上
+      // 「画的后缀」与「写进去的后缀」同时被校验到。
+      const accepted = buildWordAccept(content, base.draft, matchBase, chunk);
+      const wordSource = acceptSourceVerdict({
+        paintedText: overlay.paintedText,
+        paintedContent: shown.content,
+        accepted,
+      });
+      if (!wordSource.allow) {
+        traceOnce('word-abandon', wordSource.reason ?? 'unknown',
+          ` kind=${content.kind} chunkChars=${chunk.length}`
+          + ` paintedChars=${wordSource.paintedChars} acceptedChars=${wordSource.acceptedChars}`
+          + ` draftChars=${base.draft.length} ${frameHintFields(content.frame)}`);
+        return;
+      }
+      traceClear('word-abandon', null);
       event.preventDefault();
       event.stopPropagation();
-      const accepted = buildWordAccept(content, base.draft, matchBase, chunk);
       if (bound !== null) {
         // 与整条采纳同一条 CAS 判据（#4）：草稿在计算与写入之间被改过就放弃，
         // 不写任何字符，并收掉幽灵。
@@ -3140,8 +3239,13 @@ function applyBody(ctx: Context): void {
       renderTraced('other');
     };
     const unList = sessions.list.subscribe(onList);
-    // IME 组词抑制：捕获监听（编辑器内组合事件会冒泡到 window）。组词开始
+    // IME 组词抑制：**捕获**监听（编辑器内组合事件会冒泡到 window）。组词开始
     // 立即隐藏幽灵；结束（候选上屏）后按已提交草稿重新渲染。
+    //
+    // ⚠️ 这条捕获标记只对 **composition** 成立，别拿它给 keydown 背书（Gitea #166 证据 2）。
+    // composition 事件在某些 IME/宿主组合上会在编辑器内被 `stopPropagation` 截住，
+    // 而「组词期间不许画幽灵」是**我们自己的状态**，必须在最外层确知——晚了就是一帧
+    // 组词文本被当成草稿画上灰字。keydown 相反：它要**让路**，所以走冒泡（见下）。
     const onCompositionStart = (): void => {
       composing = true;
       renderTraced('other');
@@ -3150,7 +3254,19 @@ function applyBody(ctx: Context): void {
       composing = false;
       renderTraced('other');
     };
-    window.addEventListener('keydown', onKeyDown, true);
+    // ── Gitea #166 方案 A：keydown 从 window **捕获**改到 window **冒泡** ──────
+    //
+    // 旧的 `addEventListener('keydown', onKeyDown, true)` 让本插件跑在宿主与所有
+    // 其它插件之前，且当时全仓没有 `defaultPrevented` 判据 ⇒ 第三方输入预测弹层
+    // 刚把候选「认领」走，Tab 照样被本插件抢去采纳自己槽里那条，整段覆盖输入框。
+    //
+    // 改到冒泡后：事件先经宿主 composer 与其它插件的 target/bubble 处理器，本处理器
+    // 最后跑（此时 `defaultPrevented` 才有意义，见 `onKeyDown` 第一句）。
+    // 冒泡按「由内向外」传递，诉求是「按内层 owner → 外层插件」的顺序，冒泡正是那个顺序；
+    // 注册在 window 而不是编辑器节点上，是因为编辑器节点会被宿主重建（引用会漂）；
+    // window 直接子级的 `stopPropagation` 会**先于**本处理器挡住它。这就是本改动
+    // 唯一的高风险面，已由 `scripts/tab-ownership-smoke.mjs` 的 C/D 段逐条实测。
+    window.addEventListener('keydown', onKeyDown);
     window.addEventListener('compositionstart', onCompositionStart, true);
     window.addEventListener('compositionend', onCompositionEnd, true);
     return () => {
@@ -3171,7 +3287,10 @@ function applyBody(ctx: Context): void {
       traceClear('inline-arm-cancel', null);
       traceClear('form-hold', null);
       traceClear('deferred-repaint', null);
-      window.removeEventListener('keydown', onKeyDown, true);
+      // ⚠️ 第三个参数必须与注册处**逐字一致**：`removeEventListener` 只按
+      // (type, listener, capture标志) 匹配，标志不同的移除是**静默空操作**。
+      // 这里少了 `true` 的话冒泡监听会一直挂着（路由切换后重复消费同一个键）。
+      window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('compositionstart', onCompositionStart, true);
       window.removeEventListener('compositionend', onCompositionEnd, true);
       overlay.dispose();
