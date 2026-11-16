@@ -163,6 +163,7 @@ let officialCatalogListener: (() => void) | null = null;
 import type { PluginSettingsScope } from './settings-scope.js';
 import { resolveGhostLang, type GhostLang, type LocaleFaceLike } from './ghost-lang.js';
 import { KeyHintBarSlot, type KeyHintInput } from './key-hint-bar.js';
+import { FailureNote, type SuggestionFailureNote } from './failure-note.js';
 
 /**
  * 宿主可观察快照的最小结构视图。不从 @deepseek-ai/dsh-client-runtime 导入：
@@ -424,6 +425,18 @@ type PushedPayload = {
   /** 指示样式开关（实时值，恒写；宿主不给时按缺省：V4 开、C1 关）。 */
   caretGlow?: unknown;
   boxGlow?: unknown;
+  /**
+   * #165：宿主这一次生成**失败的摘要**（成功 / 无错误时不写这个键）。
+   *
+   * 宿主侧这个键**一直存在**（`src/index.ts` 的 `ClientPush.error`，`_push` 每次
+   * 组装时拼进去），缺的一直是**客户端这一侧**：本类型过去没有声明它、也没有任何
+   * 地方读它 ⇒ 诊断信息在类型层被保证丢弃，用户只看到「装了没反应」。
+   *
+   * 语义同其余事件型键：宿主**只在失败时写**、且每次组装载荷时现算（省略式拼装，
+   * 见 `src/index.ts` 里 `error` 键上方那段 #136 的教训）⇒ 读到缺省就是「这一次
+   * 没有失败」，不是「保留上一次的失败」。旧宿主不给这个键同样读成没有。
+   */
+  error?: unknown;
 };
 
 /**
@@ -532,6 +545,37 @@ function isComposerElement(el: Element | null): boolean {
 function isComposerTarget(target: EventTarget | null): boolean {
   return target instanceof Element && isComposerElement(target);
 }
+
+/**
+ * 把宿主推来的失败摘要归成一个**稳定的理由标签**（#165 的 `suggestion-failed` 留痕用）。
+ *
+ * ⚠️ 这里**不是**判据，也不该被当成判据：宿主侧的降级判据走的是错误码
+ * （`src/generate.ts` 的 `isMaxTokensStop` / `isUnsupportedEffort`，口径 *never parse
+ * the result; route on code*）。本函数只做**留痕的分桶**——把一句人读的摘要变成
+ * 一个稳定的槽位理由，让「同一类失败只打一行」这件事可成立。
+ *
+ * 分桶只按**本插件自己写死的**报文前缀/错误码命名，不依赖宿主或适配器的措辞
+ * （那部分不可控，故归到 `other`）。归到 `other` 的代价只是留痕更粗，不改任何行为。
+ */
+function suggestionFailureReason(message: string): string {
+  if (message.includes(MAX_TOKENS_STOP_CODE)) return 'max-tokens';
+  if (message.includes('reached maxOutputTokens')) return 'max-tokens';
+  if (message.includes(UNSUPPORTED_EFFORT_CODE) || /reasoning[ _-]?effort/i.test(message)) return 'effort';
+  if (/timed? ?out|timeout|abort/i.test(message)) return 'timeout';
+  if (/must contain text only|requested a tool/i.test(message)) return 'shape';
+  if (/no model-visible transcript|configuration is required/i.test(message)) return 'config';
+  return 'other';
+}
+
+/**
+ * #165：失败摘要里的两个**稳定错误码**（与宿主侧同名，只用于留痕分桶）。
+ *
+ * 客户端拿到的是一段 `message.slice(0, 300)` 字符串，宿主没有把 code 一起推过来；
+ * 而这两句报文由**本插件自己**产出（`src/generate.ts` 的 `MAX_TOKENS_STOP_MESSAGE`
+ * 与 `isUnsupportedEffort` 的错误码），所以按它们分桶是稳定的。
+ */
+const MAX_TOKENS_STOP_CODE = 'SUGGEST_GHOST_MAX_TOKENS';
+const UNSUPPORTED_EFFORT_CODE = 'UNSUPPORTED_REASONING_EFFORT';
 
 /** 光标是否位于输入框文本末尾：textarea 用 selectionStart/End，contenteditable 用 Selection API。 */
 function caretAtComposerEnd(el: HTMLElement): boolean {
@@ -1401,6 +1445,43 @@ function applyBody(ctx: Context): void {
     }
   };
   const keyHintNow = (): KeyHintInput | null => keyHintValue;
+  // ── #165：生成失败的**一次性静默指示** ──────────────────────────────────────
+  //
+  // 为什么与键位提示同槽位（`conversation.input.overlay`）：那条槽位是零高度的
+  // 绝对定位锚点，子项**不占垂直空间、不抢布局、不可能压到正文**，正是社区评审
+  // 原则 1 要的「静默」——不弹窗、不抢焦点、不需要用户点掉。
+  //
+  // 「一次性」是结构性的：失败摘要来自宿主**单次** `_push`，下一次成功推送带上
+  // 建议、不再带 `error` 键 ⇒ 这里被清空。它不是通知中心，也没有任何定时器。
+  let failureNote: SuggestionFailureNote | null = null;
+  const failureSubs = new Set<() => void>();
+  const notifyFailure = (): void => {
+    for (const fn of [...failureSubs]) {
+      try { fn(); } catch { /* 单个订阅者抛错不能影响其它订阅者，也不能中断渲染路径 */ }
+    }
+  };
+  /**
+   * 记一次失败（理由已由 {@link suggestionFailureReason} 归一）。
+   *
+   * 值未变时**不通知**：宿主的 `_push` 是省略式拼装，同一失败可能连续出现
+   * （例如某一回合的后续推送仍携带同一个 error），重复通知只是让 React 白跑。
+   */
+  const noteSuggestionFailure = (reason: string): void => {
+    if (failureNote?.reason === reason) return;
+    failureNote = { reason };
+    notifyFailure();
+  };
+  /** 问题解除（成功推送到了）⇒ 收回指示。没有指示时什么都不做。 */
+  const clearSuggestionFailure = (): void => {
+    if (failureNote === null) return;
+    failureNote = null;
+    notifyFailure();
+  };
+  const failureNow = (): SuggestionFailureNote | null => failureNote;
+  const subscribeFailure = (fn: () => void): (() => void) => {
+    failureSubs.add(fn);
+    return () => { failureSubs.delete(fn); };
+  };
   /**
    * 当前界面语言（提示行文案用）。
    *
@@ -1482,6 +1563,10 @@ function applyBody(ctx: Context): void {
     'regen-requested': null,
     'deferred-repaint': null,
     'push-cell': null,
+    // #165：宿主推来的生成失败摘要（`_push.error`）**首次出现 / 理由变化**时打一行。
+    // 进故障槽（warn，默认可见）：它正是过去「整类静默全灭」时唯一该有的线索。
+    // 同一理由连打由 `traceOnce` 的理由闸挡住，所以一次风暴不刷屏。
+    'suggestion-failed': null,
   };
   /**
    * 槽级冷却状态（与 `traceGates` 正交：理由闸管「同理由连打」，冷却闸管「换理由连打」）。
@@ -2815,6 +2900,29 @@ function applyBody(ctx: Context): void {
               ? settings.completionSessionId
               : (typeof pushed.completionSessionId === 'string' ? pushed.completionSessionId : null),
           };
+          // ── #165：把宿主早已推过来的失败摘要**读出来**。──────────────
+          //
+          // 位置在这里、而不是 `next` 的某个字段里：失败摘要不是配置值，进 `next`
+          // 就会参与 `configValuesEqual` 的深比较，于是「同一句错误从两次相邻推送
+          // 各来一遍」会变成两次 settingsEpoch++（正是 #21 那条读侧放大）。
+          //
+          // 三件事，都只读不写：
+          //  1. `traceOnce('suggestion-failed', …)` —— 按**理由变化**才打；
+          //  2. 一次性静默指示（`noteSuggestionFailure`，不弹窗、不抢焦点）；
+          //  3. 没有失败键时把指示与槽位一起复位（问题解除 ⇒ 下一次失败能再打一行）。
+          const pushError = typeof pushed?.error === 'string' && pushed.error.trim() !== ''
+            ? pushed.error.trim()
+            : null;
+          if (pushError !== null) {
+            const reason = suggestionFailureReason(pushError);
+            traceOnce('suggestion-failed', reason, ` chars=${pushError.length}`);
+            noteSuggestionFailure(reason);
+          } else {
+            // 只在这一格确实被重读过时才复位（`pushCellChanged`）：未变的建议格
+            // 沿用的是上一次的解析结果，拿它当「这次没失败」会把指示误清。
+            if (pushCellChanged) clearSuggestionFailure();
+            traceClear('suggestion-failed', null);
+          }
           // **值未变则整条链路止步**（#21 待查项 2 的读侧放大）：内核事件只带
           // `(ns, revision)`，revision 推进不代表本插件关心的东西变了——host 每分钟
           // 数十次的 `_push` 里大部分字段常年不变，而旧代码无条件替换 `settings` 对象
@@ -3311,6 +3419,25 @@ function applyBody(ctx: Context): void {
       }, KeyHintBarSlot),
     );
     ctx.effect(() => disposeKeyHint, 'dsh-suggest-ghost: input overlay key hint');
+    // #165：失败指示注册在**同一条槽位**上，`id` / `order` 与键位提示错开。
+    // 两者互斥是结构性的（键位提示只在幽灵真的画出来时出现，失败指示出现的时刻
+    // 正是没有幽灵），所以天然不会叠在一起；用不同 id 只是让 DOM 里可分辨。
+    const disposeFailureNote = (ctx as any).slots.inject('conversation.input.overlay', () =>
+      (ctx as any).slots.register({
+        name: 'conversation.input.overlay',
+        id: 'suggest-ghost-failure-note',
+        // 键位提示是 200；失败指示排在它之前（更靠锚点内侧），即使两者同时在场
+        // 也不会互相覆盖（两者都是 `top:0`，所以顺序只影响无障碍读取次序）。
+        order: 199,
+        inject: () => ({
+          failureNow,
+          subscribe: subscribeFailure,
+          // 语言随帧现读：与键位提示同规，改界面语言后下一次推送就是新文案。
+          get lang() { return activeLang(); },
+        }),
+      }, FailureNote),
+    );
+    ctx.effect(() => disposeFailureNote, 'dsh-suggest-ghost: input overlay failure note');
   }
 
   const remoteForCard = remoteOf(ctx);
