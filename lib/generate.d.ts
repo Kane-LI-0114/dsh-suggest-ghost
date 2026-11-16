@@ -214,6 +214,21 @@ export interface StreamMetrics {
     effortRequested: string;
     /** 本次生成里档位是否被适配器拒过（拒过 = 退一档、不带档位重发了一次）。 */
     effortRejected: boolean;
+    /**
+     * #165：本次生成里**输出预算是否因撞顶被放大过一次**。
+     *
+     * 与 `effortRejected` 同族但**不是**同一件事，也不并进 `attempts`：
+     * `attempts` 记的是常规尝试序号，而撞顶放大是「同一次调用的降级重发」，
+     * 它不占常规预算。两笔账分开记，才能区分「放大了一次仍失败」与
+     * 「放大后常规重试也失败」。
+     *
+     * ⚠️ **不进 `formatStreamMetrics`**：那行是建议成功路径的留痕，Gitea #165
+     * 的验收要求「成功路径的 trace 逐字不变」⇒ 新键只作为画像字段存在，
+     * 由冒烟与后续诊断读它，不改既有行。
+     */
+    maxTokensEscalated: boolean;
+    /** #165：**本次尝试实际请求的**输出预算（用于把两笔账分开，同样不进留痕行）。 */
+    maxTokens: number;
     /** 本次调用的收口分类，用于区分「空回复」与「被过滤」。 */
     outcome: StreamOutcome;
 }
@@ -353,6 +368,45 @@ export declare function deploymentRoute(ctx: {
     readonly provider: string;
     readonly model: string;
 } | undefined;
+/**
+ * #165：`finish.kind === 'max-tokens'` 的稳定错误码。
+ *
+ * 与 `UNSUPPORTED_EFFORT_CODE` 同一套纪律：**分派只认 code，不认报文**
+ * （本仓口径见 {@link isUnsupportedEffort} 上方那段）。
+ */
+export declare const MAX_TOKENS_STOP_CODE = "SUGGEST_GHOST_MAX_TOKENS";
+/**
+ * 放大后的**硬上限**（放大一次的落点不超过它）。
+ *
+ * 为什么有上限：`maxOutputTokens` 是用户可配项，计费与它直接挂钩。没有上限时
+ * 「2 倍」会随用户配的基数一起漂（配 30_000 ⇒ 放大到 60_000），而这条路是**自动
+ * 触发的、用户看不见的**，不该把任何一次自动化决策推到六位数 token。4096 是
+ * 「一条 240 字的建议 + 充足的思考预算」的宽松上界（建议正文按 `maxSuggestionChars`
+ * 默认 240 字符算不到 100 字 token）。
+ *
+ * ⚠️ 上限只压**放大后的落点**，不压用户自己配的基数（配了 8_000 就跑 8_000）——
+ * 本改动不改任何默认值语义（issue 方案 1「预算随能力」明确另议）。
+ */
+export declare const MAX_TOKENS_ESCALATION_CEILING = 4096;
+/**
+ * 这个错误是不是「输出预算撞顶」（#165）。
+ *
+ * 判据只认 {@link MAX_TOKENS_STOP_CODE}：撞顶是 `FinishReason.kind` 的**直接转写**，
+ * 报文里没有任何需要解析的信息。**不要**在这里加报文匹配——那会把措辞当契约，
+ * 改一句文案就让降级静默失效（失效形态是「用户又回到装了没反应」，没有断言会红）。
+ */
+export declare function isMaxTokensStop(error: unknown): boolean;
+/**
+ * 算出撞顶后要放大的预算；`undefined` = **不放**（这次就按失败处理）。
+ *
+ * 三条停止条件缺一不可，缺了任何一条都会变成烧 token 的死循环：
+ *  1. 本次生成**已经放大过**（`escalated`）⇒ 不再放大，交回常规失败路径；
+ *  2. 当前预算已是（或超过）{@link MAX_TOKENS_ESCALATION_CEILING} ⇒ 放大也不涨，不放；
+ *  3. 放大后的值**必须严格大于**当前值 ⇒ 否则等于原地重放同一份预算。
+ *
+ * 纯函数（可离线驱动，见 `scripts/max-tokens-smoke.mjs`）。
+ */
+export declare function escalateMaxTokens(current: number, escalated: boolean): number | undefined;
 /**
  * 为一个已完成回合生成建议。模型产出空或不合格回复 = 无建议（静默返回
  * undefined），真实失败抛错。

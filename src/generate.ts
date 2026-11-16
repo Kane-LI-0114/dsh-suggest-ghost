@@ -469,6 +469,21 @@ export interface StreamMetrics {
   effortRequested: string;
   /** 本次生成里档位是否被适配器拒过（拒过 = 退一档、不带档位重发了一次）。 */
   effortRejected: boolean;
+  /**
+   * #165：本次生成里**输出预算是否因撞顶被放大过一次**。
+   *
+   * 与 `effortRejected` 同族但**不是**同一件事，也不并进 `attempts`：
+   * `attempts` 记的是常规尝试序号，而撞顶放大是「同一次调用的降级重发」，
+   * 它不占常规预算。两笔账分开记，才能区分「放大了一次仍失败」与
+   * 「放大后常规重试也失败」。
+   *
+   * ⚠️ **不进 `formatStreamMetrics`**：那行是建议成功路径的留痕，Gitea #165
+   * 的验收要求「成功路径的 trace 逐字不变」⇒ 新键只作为画像字段存在，
+   * 由冒烟与后续诊断读它，不改既有行。
+   */
+  maxTokensEscalated: boolean;
+  /** #165：**本次尝试实际请求的**输出预算（用于把两笔账分开，同样不进留痕行）。 */
+  maxTokens: number;
   /** 本次调用的收口分类，用于区分「空回复」与「被过滤」。 */
   outcome: StreamOutcome;
 }
@@ -495,6 +510,8 @@ export function createStreamMetrics(effortRequested: string): StreamMetrics {
     attempts: 1,
     effortRequested,
     effortRejected: false,
+    maxTokensEscalated: false,
+    maxTokens: 0,
     outcome: 'empty',
   };
 }
@@ -846,6 +863,70 @@ export function deploymentRoute(ctx: { get?: (name: string) => unknown })
   return probeDeploymentRoute(ctx).route;
 }
 
+/**
+ * #165：`finish.kind === 'max-tokens'` 的稳定错误码。
+ *
+ * 与 `UNSUPPORTED_EFFORT_CODE` 同一套纪律：**分派只认 code，不认报文**
+ * （本仓口径见 {@link isUnsupportedEffort} 上方那段）。
+ */
+export const MAX_TOKENS_STOP_CODE = 'SUGGEST_GHOST_MAX_TOKENS';
+/** 撞顶错误的报文（**只给人读**；判据是 {@link MAX_TOKENS_STOP_CODE}，不是它）。 */
+const MAX_TOKENS_STOP_MESSAGE = 'dsh-suggest-ghost: suggestion output reached maxOutputTokens';
+
+/**
+ * 预算撞顶时把 `maxOutputTokens` 放大的倍数（#165 方案 2）。
+ *
+ * **为什么是 2**：撞顶的直接成因是「推理模型的思考 token 吃掉了正文预算」
+ * （issue 的外部报告：step-5-preview + `reasoningEffort: high`，默认 512）。
+ * 推理档位本身的分档粒度就是「倍量级」（low/medium/high），所以 2 倍是能覆盖
+ * 「思考占比约一半」这一常见形态的最小整数倍；再小（如 1.5）可能放大了仍不够、
+ * 白白多烧一趟，再大（如 4）则第一趟就可能把用户推到不需要的计费档位。
+ */
+const MAX_TOKENS_ESCALATION_FACTOR = 2;
+/**
+ * 放大后的**硬上限**（放大一次的落点不超过它）。
+ *
+ * 为什么有上限：`maxOutputTokens` 是用户可配项，计费与它直接挂钩。没有上限时
+ * 「2 倍」会随用户配的基数一起漂（配 30_000 ⇒ 放大到 60_000），而这条路是**自动
+ * 触发的、用户看不见的**，不该把任何一次自动化决策推到六位数 token。4096 是
+ * 「一条 240 字的建议 + 充足的思考预算」的宽松上界（建议正文按 `maxSuggestionChars`
+ * 默认 240 字符算不到 100 字 token）。
+ *
+ * ⚠️ 上限只压**放大后的落点**，不压用户自己配的基数（配了 8_000 就跑 8_000）——
+ * 本改动不改任何默认值语义（issue 方案 1「预算随能力」明确另议）。
+ */
+export const MAX_TOKENS_ESCALATION_CEILING = 4096;
+
+/**
+ * 这个错误是不是「输出预算撞顶」（#165）。
+ *
+ * 判据只认 {@link MAX_TOKENS_STOP_CODE}：撞顶是 `FinishReason.kind` 的**直接转写**，
+ * 报文里没有任何需要解析的信息。**不要**在这里加报文匹配——那会把措辞当契约，
+ * 改一句文案就让降级静默失效（失效形态是「用户又回到装了没反应」，没有断言会红）。
+ */
+export function isMaxTokensStop(error: unknown): boolean {
+  const box = error as { code?: unknown } | null | undefined;
+  return typeof box?.code === 'string' && box.code === MAX_TOKENS_STOP_CODE;
+}
+
+/**
+ * 算出撞顶后要放大的预算；`undefined` = **不放**（这次就按失败处理）。
+ *
+ * 三条停止条件缺一不可，缺了任何一条都会变成烧 token 的死循环：
+ *  1. 本次生成**已经放大过**（`escalated`）⇒ 不再放大，交回常规失败路径；
+ *  2. 当前预算已是（或超过）{@link MAX_TOKENS_ESCALATION_CEILING} ⇒ 放大也不涨，不放；
+ *  3. 放大后的值**必须严格大于**当前值 ⇒ 否则等于原地重放同一份预算。
+ *
+ * 纯函数（可离线驱动，见 `scripts/max-tokens-smoke.mjs`）。
+ */
+export function escalateMaxTokens(current: number, escalated: boolean): number | undefined {
+  if (escalated) return undefined;
+  if (!Number.isFinite(current) || current <= 0) return undefined;
+  if (current >= MAX_TOKENS_ESCALATION_CEILING) return undefined;
+  const bigger = Math.min(Math.floor(current * MAX_TOKENS_ESCALATION_FACTOR), MAX_TOKENS_ESCALATION_CEILING);
+  return bigger > current ? bigger : undefined;
+}
+
 /** 终止原因 → 失败信息。 */
 function finishError(finish: FinishReason): Error | undefined {
   switch (finish.kind) {
@@ -857,8 +938,19 @@ function finishError(finish: FinishReason): Error | undefined {
       error.code = finish.failure.code;
       return error;
     }
-    case 'max-tokens':
-      return new Error('dsh-suggest-ghost: suggestion output reached maxOutputTokens');
+    case 'max-tokens': {
+      // #165：这个错误必须**可判定**。预算撞顶是 `FinishReason.kind` 的直接转写，
+      // 不是报文里的信息 ⇒ 打一个稳定 code 供 {@link isMaxTokensStop} 分派，
+      // 报文保持原样（它仍要给人读）。
+      //
+      // 为什么不能用报文匹配（`/maxOutputTokens/`）：本仓口径见 `isUnsupportedEffort`
+      // 上方那段（*never parse the result; route on code*）。报文是给人看的，
+      // 改一句措辞就会让降级判据静默失效——而失效的形态是「用户又回到装了没反应」，
+      // 没有任何断言会红。code 是契约，措辞不是。
+      const error = new Error(MAX_TOKENS_STOP_MESSAGE) as Error & { code?: string };
+      error.code = MAX_TOKENS_STOP_CODE;
+      return error;
+    }
     case 'tool-calls':
       return new Error('dsh-suggest-ghost: suggestion model unexpectedly requested a tool');
     /* v8 ignore next 2 -- FinishReason 是封闭五元联合，默认分支不可达 */
@@ -979,6 +1071,21 @@ export async function generateSuggestion(
   let effort = effortOf(config.suggestionReasoningEffort);
   /** 本次生成里档位是否被拒过（拒过 = 已退一档、不带档位重发）。 */
   let effortRejected = false;
+  /**
+   * #165：本次生成**当前**的输出预算（撞顶后放大，见 {@link escalateMaxTokens}）。
+   *
+   * 用可变局部量而不是每回合重读 `config.maxOutputTokens`：放大只对**这一次调用**
+   * 成立，下一次回合仍从配置值起算（放大是失败降级，不是新的默认值）。
+   */
+  let maxTokens = config.maxOutputTokens;
+  /**
+   * #165：「只放大一次」的显式闸门。
+   *
+   * **必须是布尔量、不能靠 `attempt -= 1` 的次数算术**：次数算术下多一条 `continue`
+   * 就等于死循环，而这种失控的形态是「一直烧 token 却不出建议」——按 issue 成本段
+   * 这正是要给下一个人钉住的点。用布尔量则代码结构本身就说明了「至多一次」。
+   */
+  let maxTokensEscalated = false;
   // 用 while 而不是 for：档位被拒后的那次重发**不占用常规重试预算**（下面那处
   // `attempt -= 1`），它不是瞬时故障的再一次尝试，而是同一次调用的退一档重发。
   let attempt = 0;
@@ -991,7 +1098,7 @@ export async function generateSuggestion(
       model: route.model,
       messages,
       system,
-      maxTokens: config.maxOutputTokens,
+      maxTokens,
       sessionId: session.id,
       signal: callDeadline.signal,
       // 条件展开而不是写 `reasoningEffort: effort`：不传时这个键必须**不存在**。
@@ -1004,6 +1111,8 @@ export async function generateSuggestion(
     const metrics = createStreamMetrics(effortLabel(effort));
     metrics.attempts = attempt;
     metrics.effortRejected = effortRejected;
+    metrics.maxTokensEscalated = maxTokensEscalated;
+    metrics.maxTokens = maxTokens;
     const attemptStartedAt = Date.now();
     try {
       callDeadline.signal.throwIfAborted();
@@ -1066,6 +1175,23 @@ export async function generateSuggestion(
         effortRejected = true;
         attempt -= 1;
         continue;
+      }
+      // **撞顶即放大一次**（#165 方案 2，与上面那条同族、同一形状）：预算被推理
+      // 文本吃光时，当场把 `maxTokens` 放大一次并立刻重发，不退避、不进常规重试链
+      // （`attempt -= 1` 把刚才那次还回去）。判据只认 code（{@link isMaxTokensStop}），
+      // 不认报文。
+      //
+      // 与档位那条的唯一结构差异是**放大的幂等性由布尔闸门保证**：放大过的这一次
+      // 若再撞顶，{@link escalateMaxTokens} 返回 undefined ⇒ 落到下面的常规失败路径
+      // 正常抛出。所以「只重发一次」写在代码结构里，而不是靠重试次数碰巧不对。
+      if (isMaxTokensStop(error)) {
+        const bigger = escalateMaxTokens(maxTokens, maxTokensEscalated);
+        if (bigger !== undefined) {
+          maxTokens = bigger;
+          maxTokensEscalated = true;
+          attempt -= 1;
+          continue;
+        }
       }
       // 最后一次尝试失败则原样抛出。
       if (attempt >= maxAttempts) throw error;
@@ -1139,6 +1265,12 @@ export async function generateCompletion(
   // 只是读的是 completionReasoningEffort——续写在用户停手等待的路径上，更慢不起。
   let effort = effortOf(config.completionReasoningEffort);
   let effortRejected = false;
+  // #165：撞顶放大，两条 generation 路径各自算自己的预算。续写**没有独立预算键**
+  // （它读的也是 `config.maxOutputTokens`，本轮已复核），所以起点同建议；但「放大过」
+  // 的状态、上限判定都各自独立——一次建议撞顶不该消耗续写的放大机会。
+  let maxTokens = config.maxOutputTokens;
+  /** 同 `generateSuggestion`：显式闸门，代码结构上就是「至多一次」。 */
+  let maxTokensEscalated = false;
   let attempt = 0;
   while (attempt < maxAttempts) {
     attempt += 1;
@@ -1148,7 +1280,7 @@ export async function generateCompletion(
       model: route.model,
       messages,
       system,
-      maxTokens: config.maxOutputTokens,
+      maxTokens,
       sessionId: session.id,
       signal: callDeadline.signal,
       ...(effort === undefined ? {} : { reasoningEffort: effort }),
@@ -1156,6 +1288,8 @@ export async function generateCompletion(
     const metrics = createStreamMetrics(effortLabel(effort));
     metrics.attempts = attempt;
     metrics.effortRejected = effortRejected;
+    metrics.maxTokensEscalated = maxTokensEscalated;
+    metrics.maxTokens = maxTokens;
     const attemptStartedAt = Date.now();
     try {
       callDeadline.signal.throwIfAborted();
@@ -1195,6 +1329,17 @@ export async function generateCompletion(
         effortRejected = true;
         attempt -= 1;
         continue;
+      }
+      // #165 撞顶即放大一次（判据、上限、幂等闸门与建议路径同源：`isMaxTokensStop`
+      // + `escalateMaxTokens`；两处**共用同一个函数**是刻意的，分开写必然漂）。
+      if (isMaxTokensStop(error)) {
+        const bigger = escalateMaxTokens(maxTokens, maxTokensEscalated);
+        if (bigger !== undefined) {
+          maxTokens = bigger;
+          maxTokensEscalated = true;
+          attempt -= 1;
+          continue;
+        }
       }
       if (attempt >= maxAttempts) throw error;
       await backoff(signal, 800 * attempt);
