@@ -782,8 +782,21 @@ const main = async () => {
     const pressed = await llm.client.evaluate(INJECTS.press(ALT_G));
     check('llm：`defaultPrevented === true`（吞键，与改动前一致）',
       pressed.defaultPrevented === true, `defaultPrevented=${String(pressed.defaultPrevented)}`);
-    check('llm：探针监听器**收不到**（stopPropagation 生效，与改动前一致）',
-      pressed.probeHits === 0, `probeHits=${String(pressed.probeHits)}`);
+    // ⚠️ 合并 #166 后本条改口径，**不是放宽**，是判据换了依赖：
+    //
+    // #168 单条时本处理器在 window **捕获**段，`stopPropagation()` 能挡住挂在
+    // target 上的探针 ⇒ 「收不到」等价于「stopPropagation 生效」。
+    // #166 把 keydown 迁到 window **冒泡**段后，本处理器是**最后**跑的：探针（target 段）
+    // 早在本处理器之前就已经收到事件，此时再 `stopPropagation()` 也拦不住它 ——
+    // 「探针收不到」不再是「本插件吞了键」的必要条件，也永远不可能成立。
+    //
+    // `#168` 真正要钉的两件事在合并语义下改为：
+    //   ① 事件**被本插件认领了**（`defaultPrevented === true`，上面那条已经钉住）；
+    //   ② 动作**真的执行了**（恰好一条 regen op，下面那条所在）。
+    // 探针计数在这里只作为**事实记录**打印，不参与判定 —— 拿它判定会把 #166 的正确
+    // 迁移误报成回归（本冒烟实测踩到过：合并后 probeHits 由 0 变 1，其余全绿）。
+    console.log(`      · llm 支探针计数 = ${String(pressed.probeHits)}`
+      + `（#166 迁移到冒泡后本处理器最后跑，探针必先收到；此数仅记录，不参与判定）`);
     check('llm：确实发出了 **一条** regen op（动作照旧）',
       pressed.regenOps.length === 1, `regenOps=${JSON.stringify(pressed.regenOps)}`);
 
