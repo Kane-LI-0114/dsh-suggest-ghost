@@ -69,6 +69,15 @@
  *   node --experimental-strip-types scripts/regen-key-smoke.mjs --check-injects
  *   node --experimental-strip-types scripts/regen-key-smoke.mjs --self-test
  *   node --experimental-strip-types scripts/regen-key-smoke.mjs --inject-legacy swallow-first
+ *
+ * ## 一条必须知道的未覆盖项（⑥）
+ *
+ * 「放行后 Alt+G 会不会落到浏览器/系统的原生动作上」在 DOM 层只能取到侧面证据
+ * （见用例 ⑥）。**原生菜单不是 DOM 事件**，而合成事件 `isTrusted === false` 又永远
+ * 触发不了原生动作。⑥ 用 CDP 受信任按键补这一面，但 headless Chromium 在装载真实
+ * bundle 的页面上**投递不稳定**（本夹具实测：可达 → 之后为 0），所以 ⑥ 送达失败时
+ * 打印 **NOT-COVERED**、不计入 ✓/✗、也不改变主判据的 PASS/FAIL，汇总行带「⑥ 未覆盖」。
+ * ⇒ 本脚本的绿**不包含**「原生层无副作用」这一条，那一项仍是上线前的人工项。
  */
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
@@ -94,6 +103,15 @@ const SELF_TEST = argv.includes('--self-test');
 let passed = 0;
 let failed = 0;
 let notCovered = null;
+/**
+ * ⑥「原生动作面」的送达失败：**软未覆盖**。
+ *
+ * 与 `notCovered` 分开：`notCovered` 是「整个脚本没跑成」（坏构建/坏环境 ⇒ 退出 2，
+ * 谁的结论都不作数）；而这里主判据（①–⑤、B 段）**已经真的跑到了并有结论**，
+ * 只是 ⑥ 那一项没验到 ⇒ 打印 NOT-COVERED、不计入 ✓/✗、**也不改变主判据的 PASS/FAIL**。
+ * 否则 `test:smoke` 会因为 headless 的按键投递不稳而恒红，量具就成了噪声源。
+ */
+let softNotCovered = null;
 
 const ok = (name) => { passed += 1; console.log(`  ✓ ${name}`); };
 /** 断言一条并打印读数（红的时候要看得到实测值，不是只看到"红了"）。 */
@@ -277,6 +295,75 @@ INJECTS.press = (spec) => `(async () => {
       .map((op) => JSON.parse((op && op.value) || '{}'))
       .flatMap((body) => (Array.isArray(body.ops) ? body.ops.map((o) => o && o.op) : []))
       .filter((op) => op === 'regen'),
+  };
+})()`;
+
+/**
+ * 装一组「旁观者」监听器，观察**放行之后**这个键还有没有别人吞。
+ *
+ * 这是 issue 成本段那条「某些宿主组合上 Alt+G 会落到浏览器/系统的原生动作上」在
+ * **DOM 层**能取到的全部证据：
+ *  - `downAtDocument` / `upAtDocument`：冒泡到 document 时还在不在传播（= 有没有
+ *    下游处理器再调 `stopPropagation`）；
+ *  - `preventedByOther`：除本插件外**任何**处理器在 keydown/keyup 上是否
+ *    `preventDefault` 了它（本插件已证明自己不碰事件，所以这里非 0 就说明有别家）；
+ *  - `menuish`：有没有冒出 `contextmenu` / `popup` 这类与"菜单"有关的事件。
+ *
+ * ⚠️ 它测不到的部分（**必须写清，否则就是把没验到说成验过**）：浏览器的原生菜单
+ * （如 Chromium 的 Alt 唤出菜单栏、或操作系统的全局快捷键）是**浏览器的 chrome 层
+ * 与操作系统**的行为，不是 DOM 事件。而且**合成事件（`dispatchEvent`）的
+ * `isTrusted === false`，永远不会触发原生动作** —— 实测见 PR。所以这条断言只能
+ * 证明「DOM 层没有别人再拦它」，不能证明「原生层没有副作用」。
+ */
+INJECTS.observePassThrough = `(() => {
+  window.__watch = { downAtDocument: 0, upAtDocument: 0, preventedByOther: [], menuish: [], anyKeydown: 0, identity: [], capWindow: 0 };
+  const w = window.__watch;
+  // 冒泡到 document 的旁观监听器（bubble 阶段、最后才跑）：能跑到这里 ⇒ 没被下游 stopPropagation。
+  document.addEventListener('keydown', (ev) => {
+    w.anyKeydown += 1;
+    w.identity.push(ev.code + ':trusted=' + String(ev.isTrusted));
+    if (ev.code !== 'KeyG') return;
+    w.downAtDocument += 1;
+    if (ev.defaultPrevented) w.preventedByOther.push('keydown:prevented');
+  });
+  document.addEventListener('keyup', (ev) => {
+    if (ev.code !== 'KeyG') return;
+    w.upAtDocument += 1;
+    if (ev.defaultPrevented) w.preventedByOther.push('keyup:prevented');
+  });
+  // 捕获阶段也挂一份：用来区分「事件没到页面」与「到了但冒泡被拦」（§8：没输出≠成功）。
+  window.addEventListener('keydown', (ev) => { w.capWindow += 1; w.identity.push('cap:' + ev.code + ':trusted=' + String(ev.isTrusted) + ':tgt=' + (ev.target && (ev.target.id || ev.target.tagName))); }, true);
+  for (const t of ['contextmenu', 'popup', 'popupmenus']) {
+    document.addEventListener(t, () => { w.menuish.push(t); });
+  }
+  return true;
+})()`;
+
+/** 读旁观者监听器的读数（不重置：多轮观察可以累加后自行取差）。 */
+INJECTS.readWatch = `(() => JSON.parse(JSON.stringify(window.__watch)))()`;
+
+/** 清空旁观者读数（每轮观察前调一次，保证读数是**这一轮**的）。 */
+INJECTS.resetWatch = `(() => {
+  window.__watch = { downAtDocument: 0, upAtDocument: 0, preventedByOther: [], menuish: [], anyKeydown: 0, identity: [], capWindow: 0 };
+  return true;
+})()`;
+
+/**
+ * 用 CDP 发一次**受信任**按键（`isTrusted === true`）。
+ *
+ * 与 `INJECTS.press` 的区别：`dispatchEvent` 造的事件 `isTrusted === false`，
+ * **永远不会**触发原生默认动作；只有这条路径才是"用户真的按了"。它由 Node 侧
+ * 组合 `Input.dispatchKeyEvent`，页内只负责读结果，所以这里只留读数的注入体。
+ */
+INJECTS.readTrustedProbe = `(() => {
+  const ed = document.querySelector('#probe-composer');
+  return {
+    composerText: ed === null ? null : ed.textContent,
+    watch: JSON.parse(JSON.stringify(window.__watch)),
+    overlayShown: (() => {
+      const o = document.querySelector('#dsh-suggest-ghost-overlay');
+      return o === null ? null : o.dataset.shown;
+    })(),
   };
 })()`;
 
@@ -613,6 +700,75 @@ const main = async () => {
     check('⑤ 幽灵没被这一下按键弄掉（非 llm 只是放行，不改显示）',
       pressed.ghostShown === '1' && pressed.ghostText === history.shown?.text,
       `after=${JSON.stringify({ text: pressed.ghostText, shown: pressed.ghostShown })} before=${JSON.stringify(history.shown?.text)}`);
+
+    // ── ⑥ 放行之后「原生动作面」在 DOM 层能取到的证据 ────────────────────────
+    //
+    // issue 成本段担心的是「放行后 Alt+G 落到浏览器 / 系统的原生动作上」。这条在
+    // **这套量具里能测到多少、不能测到多少**，必须分开说，否则就是把没验到写成通过：
+    //
+    //  **测不到**：浏览器 chrome 层（Alt 唤出菜单栏）与操作系统全局快捷键不是 DOM 事件。
+    //   而且 `dispatchEvent` 造的合成事件 `isTrusted === false`（实测），
+    //   **永远不会**触发原生动作 —— 所以 ①–⑤ 那一轮证明不了原生层没副作用。
+    //
+    //  **测得到**（这一节）：用 CDP `Input.dispatchKeyEvent`（受信任路径，实测
+    //   `isTrusted === true`）发一次真 Alt+G，读旁观者监听器：
+    //     a) 按键是否真的送达页面（捕获阶段计数器）——**送达失败不是"没被拦"**；
+    //     b) 送达时是否仍在传播（冒泡到 document）；
+    //     c) 送达时除本插件外有没有别的 DOM 处理器 preventDefault 它；
+    //     d) 有没有冒出 contextmenu / popup 这类菜单相关事件。
+    //
+    // ⚠️ 实测教训（写下来免得下一个人重踩）：**headless Chromium 在装载了真实 bundle
+    // 的页面上，受信任 Alt+G 的投递不稳定** —— 本夹具里第一次可达、之后多次为 0；
+    // 而同一套 CDP 调用在空白页上稳定可达。所以送达失败时必须报 **NOT-COVERED**
+    // （退出码 2），不能报 FAIL（那会把环境问题说成缺陷），更不能报 PASS（没验到）。
+    await history.client.evaluate(INJECTS.observePassThrough);
+    await history.client.evaluate(INJECTS.resetWatch);
+    // 真按 Alt → 按 G → 松开：比"只给 G 挂 modifiers"更接近真实键盘序列。
+    await history.client.send('Input.dispatchKeyEvent', {
+      type: 'keyDown', modifiers: 1, key: 'Alt', code: 'AltLeft',
+      windowsVirtualKeyCode: 18, nativeVirtualKeyCode: 18,
+    });
+    await sleep(60);
+    await history.client.send('Input.dispatchKeyEvent', {
+      type: 'keyDown', modifiers: 1, key: 'g', code: 'KeyG',
+      windowsVirtualKeyCode: 71, nativeVirtualKeyCode: 71,
+    });
+    await sleep(120);
+    await history.client.send('Input.dispatchKeyEvent', {
+      type: 'keyUp', modifiers: 1, key: 'g', code: 'KeyG',
+      windowsVirtualKeyCode: 71, nativeVirtualKeyCode: 71,
+    });
+    await history.client.send('Input.dispatchKeyEvent', {
+      type: 'keyUp', modifiers: 0, key: 'Alt', code: 'AltLeft',
+      windowsVirtualKeyCode: 18, nativeVirtualKeyCode: 18,
+    });
+    await sleep(150);
+    const trusted = await history.client.evaluate(INJECTS.readTrustedProbe);
+    const watch = trusted?.watch ?? {};
+    const delivered = (watch.capWindow ?? 0) > 0;
+    const detail = `capWindow=${String(watch.capWindow)} anyKeydown=${String(watch.anyKeydown)}`
+      + ` downAtDocument=${String(watch.downAtDocument)}`
+      + ` identity=${JSON.stringify(watch.identity)}`;
+
+    if (!delivered) {
+      // 送达失败：这三条**不作判定**，整体记 NOT-COVERED（不污染 PASS/FAIL 计数）。
+      softNotCovered = `⑥ 受信任 Alt+G 没送达到页面（${detail}）`
+        + ' —— headless Chromium 在装载真实 bundle 的页面上投递不稳定，'
+        + '**不是**缺陷证据；⑥ 的「原生动作面」本轮未验。';
+      console.log(`  ⚠️  NOT-COVERED：⑥ 受信任 Alt+G 没送达到页面（${detail}）`);
+      console.log('      这不计入 ✓/✗：送达失败既不是通过也不是失败。');
+    } else {
+      check('⑥ 受信任 Alt+G：keydown 冒泡到 document（没被下游 stopPropagation）',
+        (watch.downAtDocument ?? 0) > 0, detail);
+      check('⑥ 受信任 Alt+G：除本插件外没有别的 DOM 处理器 preventDefault 它',
+        Array.isArray(watch.preventedByOther) && watch.preventedByOther.length === 0,
+        `preventedByOther=${JSON.stringify(watch.preventedByOther)}`);
+      check('⑥ 受信任 Alt+G：没有冒出 contextmenu / popup 这类菜单相关事件',
+        Array.isArray(watch.menuish) && watch.menuish.length === 0,
+        `menuish=${JSON.stringify(watch.menuish)}`);
+      check('⑥ 受信任 Alt+G 之后幽灵仍在屏（放行不改显示）',
+        trusted?.overlayShown === '1', `overlayShown=${String(trusted?.overlayShown)}`);
+    }
   } finally {
     history.client.close();
   }
@@ -655,10 +811,21 @@ try {
 
 if (notCovered !== null) {
   console.log(`\n⚠️  NOT-COVERED：${notCovered.slice(0, 600)}`);
-  console.log('    这是脚本/环境问题，不是断言结论：上面的 ✓/✗ 计数不作数。');
+  if (failed > 0) {
+    // 已经有用例真的红了：**红的那些是结论**，未覆盖的是另一件事，两者一起报。
+    console.log(`❌ regen-key: ${passed} 项通过 / ${failed} 项红；另有 1 处 NOT-COVERED（见上）`);
+  } else {
+    // 全部跑到的都绿，只有一处没验到 ⇒ 整体不能算通过（§5：没验到的不得写成通过）。
+    console.log(`素材结论：已跑的 ${passed} 项全绿；但**有一处未覆盖 ⇒ 本条不计为 PASS**。`);
+  }
   process.exit(2);
 }
 
 const injected = MODE_INJECT === null ? '' : `（注入模式：${MODE_INJECT}）`;
-console.log(`\n${failed === 0 ? '✅' : '❌'} regen-key${injected}: ${passed} 项通过 / ${failed} 项红`);
+if (softNotCovered !== null) {
+  console.log(`\n⚠️  NOT-COVERED（不影响主判据）：${softNotCovered.slice(0, 400)}`);
+  console.log('    主判据（①–⑤、B 段）的结论照常有效；仅 ⑥「原生动作面」未被验证。');
+}
+const tail = softNotCovered === null ? '' : '（⑥ 未覆盖）';
+console.log(`\n${failed === 0 ? '✅' : '❌'} regen-key${injected}: ${passed} 项通过 / ${failed} 项红${tail}`);
 process.exit(failed === 0 ? 0 : 1);
