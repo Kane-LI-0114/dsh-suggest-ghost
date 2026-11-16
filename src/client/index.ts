@@ -2932,20 +2932,33 @@ function applyBody(ctx: Context): void {
     // 只在幽灵在屏时可用（`shown !== null` 是 `onKeyDown` 的头一道门）。**排在采纳闸之前**：
     // 若把 regen 键与 acceptKey 配成同一个键，采纳优先是本仓既有语义（Tab 永远采纳），
     // 而 regen 是**新增**入口，不该抢走用户已经习惯的那一个。
-    // 与 `acceptKey` 不同，regen **吞按键**（preventDefault）：否则 `Alt+G` 在某些宿主组合上
-    // 会落到浏览器 / 系统的原生动作上（例如带 Alt 的菜单快捷键），那是用户没要的副作用。
+    // 与 `acceptKey` 不同，regen 在**真的要执行动作**时吞按键（preventDefault）：否则
+    // `Alt+G` 在某些宿主组合上会落到浏览器 / 系统的原生动作上（例如带 Alt 的菜单快捷键），
+    // 那是用户没要的副作用。
+    //
+    // ⚠️ 这条吞键理由**只对「我们要执行动作」的分支成立**（Gitea #168）。顺序曾经是先吞键
+    // 再判 kind：非 llm 形态下用户按下 `Alt+G`，屏幕上什么都没发生、键也到不了输入框，
+    // 只留一条 debug trace —— 而 `key-hint-text.ts` 的「换一条」段本就只在 llm 形态显示，
+    // 等于用户在**没有任何界面元素声称这个键有用**的形态上被吞了键，连「我们在处理它」
+    // 的借口都没有。现在先判 kind：非 llm 一律不碰事件，按键回到原生行为（插入字符 /
+    // 移焦点 / 其它组件的处理），与同函数采纳支的 #38 闸（「此刻没有可采纳的幽灵」就不
+    // 吞键）对齐到同一句判据。不执行动作时把键吞掉，副作用只是从「落到原生动作」变成
+    // 「什么都不发生」，后者并不更安全，只是更难诊断。
     if (settings.regenEnabled) {
       const regenMatcher = parseAcceptKey(settings.regenKey);
       if (regenMatcher !== undefined && regenMatcher(event)) {
-        event.preventDefault();
-        event.stopPropagation();
-        if (content.kind === 'llm') {
+        if (content.kind !== 'llm') {
           // 只对 LLM 建议有意义：历史补全/续写是本地即时算出的，没有"再要一条"这种语义
           // （它们的候选集合由历史环与草稿决定，重出的结果必然是同一份）。
-          requestRegen(content, base);
-        } else {
+          // 这条 trace 是这一支**唯一**的观测面（`traceOnce` 按理由变化才打，不刷屏）。
+          // 注意：这里**不** `preventDefault` / `stopPropagation`，也不 `return` 之外的动作
+          // —— 事件必须原样交还给宿主与其它处理器（#168 的验收判据）。
           traceOnce('regen-skipped', 'not-llm', ` kind=${content.kind}`);
+          return;
         }
+        event.preventDefault();
+        event.stopPropagation();
+        requestRegen(content, base);
         return;
       }
     }
