@@ -50,6 +50,7 @@ import {
   type FrameHint,
   type FrameLedger,
 } from './accept-guard.js';
+import { acceptKeyFor } from './accept-key.js';
 import { alignCompletion, decideCompletionReuse, decideLlmForm, hasUserDraft } from './completion-align.js';
 import { buildOpsPayload, createSeqSource } from './ops-envelope.js';
 import { nextAcceptChunk } from './chunk.js';
@@ -451,8 +452,11 @@ const OVERLAY_ID = 'dsh-suggest-ghost-overlay';
  * 「改设置 ⇒ 换内容」只在 `syncPendingStyle` 里发生，不需要重建 overlay。
  */
 const PENDING_STYLE_ID = 'dsh-suggest-ghost-pending-css';
-/** 默认采纳快捷键（与 host 默认一致）。 */
-const DEFAULT_ACCEPT_KEY = 'Tab';
+// 采纳键常量与判据都搬到了 `accept-key.ts`（Gitea #167）：「这条幽灵按哪个键采纳」在
+// 本文件里有**两个**消费点 —— 键位提示行的文案（render 路径）与 `onKeyDown` 的匹配。
+// 常量曾留在这里、判据写两份，两者一致靠的是复制，而不是结构；一旦将来把 `acceptKey`
+// 扩到 history/inline，只改行为那处就会让提示行开始说假话。现在两条路径都只经
+// `acceptKeyOfContent()`（判据在 `acceptKeyFor`），本文件不再持有 `'Tab'` 那份字面量。
 /** settings 命名空间（与 host 端一致）。 */
 const SETTINGS_NAMESPACE = 'suggest-ghost';
 /**
@@ -579,6 +583,16 @@ type GhostContent =
   | { kind: 'history'; prefix: string; suffix: string; full: string; frame: FrameHint }
   /** 停顿续写：LLM 生成的草稿延续（prefix=当时草稿，suffix=续写文本，full=prefix+suffix）。 */
   | { kind: 'inline'; prefix: string; suffix: string; full: string; frame: FrameHint };
+
+/**
+ * 这条幽灵**实际生效**的采纳键 —— 本文件里取采纳键的最后一步，判据本体在 `accept-key.ts`。
+ *
+ * 存在的理由只是类型面：`acceptKey` 字段只长在 `llm` 那一支上，要把判别联合窄化成
+ * `accept-key.ts` 的入参形状，判别动作本身得发生在有类型信息的地方。判别**只此一处**、
+ * 键值判据也只此一处（`acceptKeyFor`）—— 提示行与 `onKeyDown` 两条路径共用本函数。
+ */
+const acceptKeyOfContent = (content: GhostContent): string =>
+  acceptKeyFor({ kind: content.kind, acceptKey: content.kind === 'llm' ? content.acceptKey : undefined });
 
 /**
  * overlay 绘制所需的最小形状（{@link decideOverlayPaint} 的入参）。
@@ -2128,7 +2142,7 @@ function applyBody(ctx: Context): void {
     if (overlay.isPainted && settings.showKeyHint) {
       setKeyHint({
         kind: content.kind,
-        acceptKey: content.kind === 'llm' ? content.acceptKey : DEFAULT_ACCEPT_KEY,
+        acceptKey: acceptKeyOfContent(content),
         regenKey: settings.regenKey,
         wordAccept: settings.wordAccept,
         regenEnabled: settings.regenEnabled,
@@ -2913,7 +2927,7 @@ function applyBody(ctx: Context): void {
     const content = shown.content;
     // CAS 基线：这份 content **计算时**所用的草稿快照（文本 + 宿主 draftRev）。
     const base = shown.base;
-    const acceptKey = content.kind === 'llm' ? content.acceptKey : DEFAULT_ACCEPT_KEY;
+    const acceptKey = acceptKeyOfContent(content);
     // ── #127 换一条（regen）──────────────────────────────────────────────────
     // 只在幽灵在屏时可用（`shown !== null` 是 `onKeyDown` 的头一道门）。**排在采纳闸之前**：
     // 若把 regen 键与 acceptKey 配成同一个键，采纳优先是本仓既有语义（Tab 永远采纳），
