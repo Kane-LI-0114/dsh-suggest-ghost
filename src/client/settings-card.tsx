@@ -217,10 +217,10 @@ export const GHOST_FIELDS: ReadonlyArray<{
   },
   {
     key: 'acceptKey',
-    label: { zh: '采纳快捷键', en: 'Accept shortcut' },
+    label: { zh: '采纳快捷键（LLM 下一条建议）', en: 'Accept shortcut (LLM next suggestion)' },
     hint: {
-      zh: '采纳建议的快捷键。默认 Tab，也可以设成字母、方向键或 F1–F12。',
-      en: 'Key that accepts a suggestion. Tab by default; letters, arrow keys and F1–F12 also work.',
+      zh: '只对「下一条建议」生效，可设成字母、方向键或 F1–F12。历史补全与停顿续写固定用 Tab，屏幕上那行提示会写明当前实际生效的键。',
+      en: 'Applies to the LLM next suggestion only; letters, arrow keys and F1–F12 work here. History and pause completion always use Tab — the on-screen hint names the key that really works.',
     },
     kind: 'key',
     section: 'llm',

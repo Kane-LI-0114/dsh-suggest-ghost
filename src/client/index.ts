@@ -50,6 +50,10 @@ import {
   type FrameHint,
   type FrameLedger,
 } from './accept-guard.js';
+import { acceptKeyFor } from './accept-key.js';
+// Gitea #166 方案 B1：采纳前校验「浮层画的那句」与「要写入的那句」同源。
+import { acceptSourceVerdict } from './accept-source.js';
+import { shouldYieldKey } from './yield-key.js';
 import { alignCompletion, decideCompletionReuse, decideLlmForm, hasUserDraft } from './completion-align.js';
 import { buildOpsPayload, createSeqSource } from './ops-envelope.js';
 import { nextAcceptChunk } from './chunk.js';
@@ -162,6 +166,7 @@ let officialCatalogListener: (() => void) | null = null;
 import type { PluginSettingsScope } from './settings-scope.js';
 import { resolveGhostLang, type GhostLang, type LocaleFaceLike } from './ghost-lang.js';
 import { KeyHintBarSlot, type KeyHintInput } from './key-hint-bar.js';
+import { FailureNote, type SuggestionFailureNote } from './failure-note.js';
 
 /**
  * 宿主可观察快照的最小结构视图。不从 @deepseek-ai/dsh-client-runtime 导入：
@@ -423,6 +428,18 @@ type PushedPayload = {
   /** 指示样式开关（实时值，恒写；宿主不给时按缺省：V4 开、C1 关）。 */
   caretGlow?: unknown;
   boxGlow?: unknown;
+  /**
+   * #165：宿主这一次生成**失败的摘要**（成功 / 无错误时不写这个键）。
+   *
+   * 宿主侧这个键**一直存在**（`src/index.ts` 的 `ClientPush.error`，`_push` 每次
+   * 组装时拼进去），缺的一直是**客户端这一侧**：本类型过去没有声明它、也没有任何
+   * 地方读它 ⇒ 诊断信息在类型层被保证丢弃，用户只看到「装了没反应」。
+   *
+   * 语义同其余事件型键：宿主**只在失败时写**、且每次组装载荷时现算（省略式拼装，
+   * 见 `src/index.ts` 里 `error` 键上方那段 #136 的教训）⇒ 读到缺省就是「这一次
+   * 没有失败」，不是「保留上一次的失败」。旧宿主不给这个键同样读成没有。
+   */
+  error?: unknown;
 };
 
 /**
@@ -451,8 +468,11 @@ const OVERLAY_ID = 'dsh-suggest-ghost-overlay';
  * 「改设置 ⇒ 换内容」只在 `syncPendingStyle` 里发生，不需要重建 overlay。
  */
 const PENDING_STYLE_ID = 'dsh-suggest-ghost-pending-css';
-/** 默认采纳快捷键（与 host 默认一致）。 */
-const DEFAULT_ACCEPT_KEY = 'Tab';
+// 采纳键常量与判据都搬到了 `accept-key.ts`（Gitea #167）：「这条幽灵按哪个键采纳」在
+// 本文件里有**两个**消费点 —— 键位提示行的文案（render 路径）与 `onKeyDown` 的匹配。
+// 常量曾留在这里、判据写两份，两者一致靠的是复制，而不是结构；一旦将来把 `acceptKey`
+// 扩到 history/inline，只改行为那处就会让提示行开始说假话。现在两条路径都只经
+// `acceptKeyOfContent()`（判据在 `acceptKeyFor`），本文件不再持有 `'Tab'` 那份字面量。
 /** settings 命名空间（与 host 端一致）。 */
 const SETTINGS_NAMESPACE = 'suggest-ghost';
 /**
@@ -529,6 +549,37 @@ function isComposerTarget(target: EventTarget | null): boolean {
   return target instanceof Element && isComposerElement(target);
 }
 
+/**
+ * 把宿主推来的失败摘要归成一个**稳定的理由标签**（#165 的 `suggestion-failed` 留痕用）。
+ *
+ * ⚠️ 这里**不是**判据，也不该被当成判据：宿主侧的降级判据走的是错误码
+ * （`src/generate.ts` 的 `isMaxTokensStop` / `isUnsupportedEffort`，口径 *never parse
+ * the result; route on code*）。本函数只做**留痕的分桶**——把一句人读的摘要变成
+ * 一个稳定的槽位理由，让「同一类失败只打一行」这件事可成立。
+ *
+ * 分桶只按**本插件自己写死的**报文前缀/错误码命名，不依赖宿主或适配器的措辞
+ * （那部分不可控，故归到 `other`）。归到 `other` 的代价只是留痕更粗，不改任何行为。
+ */
+function suggestionFailureReason(message: string): string {
+  if (message.includes(MAX_TOKENS_STOP_CODE)) return 'max-tokens';
+  if (message.includes('reached maxOutputTokens')) return 'max-tokens';
+  if (message.includes(UNSUPPORTED_EFFORT_CODE) || /reasoning[ _-]?effort/i.test(message)) return 'effort';
+  if (/timed? ?out|timeout|abort/i.test(message)) return 'timeout';
+  if (/must contain text only|requested a tool/i.test(message)) return 'shape';
+  if (/no model-visible transcript|configuration is required/i.test(message)) return 'config';
+  return 'other';
+}
+
+/**
+ * #165：失败摘要里的两个**稳定错误码**（与宿主侧同名，只用于留痕分桶）。
+ *
+ * 客户端拿到的是一段 `message.slice(0, 300)` 字符串，宿主没有把 code 一起推过来；
+ * 而这两句报文由**本插件自己**产出（`src/generate.ts` 的 `MAX_TOKENS_STOP_MESSAGE`
+ * 与 `isUnsupportedEffort` 的错误码），所以按它们分桶是稳定的。
+ */
+const MAX_TOKENS_STOP_CODE = 'SUGGEST_GHOST_MAX_TOKENS';
+const UNSUPPORTED_EFFORT_CODE = 'UNSUPPORTED_REASONING_EFFORT';
+
 /** 光标是否位于输入框文本末尾：textarea 用 selectionStart/End，contenteditable 用 Selection API。 */
 function caretAtComposerEnd(el: HTMLElement): boolean {
   if (el instanceof HTMLTextAreaElement) {
@@ -579,6 +630,16 @@ type GhostContent =
   | { kind: 'history'; prefix: string; suffix: string; full: string; frame: FrameHint }
   /** 停顿续写：LLM 生成的草稿延续（prefix=当时草稿，suffix=续写文本，full=prefix+suffix）。 */
   | { kind: 'inline'; prefix: string; suffix: string; full: string; frame: FrameHint };
+
+/**
+ * 这条幽灵**实际生效**的采纳键 —— 本文件里取采纳键的最后一步，判据本体在 `accept-key.ts`。
+ *
+ * 存在的理由只是类型面：`acceptKey` 字段只长在 `llm` 那一支上，要把判别联合窄化成
+ * `accept-key.ts` 的入参形状，判别动作本身得发生在有类型信息的地方。判别**只此一处**、
+ * 键值判据也只此一处（`acceptKeyFor`）—— 提示行与 `onKeyDown` 两条路径共用本函数。
+ */
+const acceptKeyOfContent = (content: GhostContent): string =>
+  acceptKeyFor({ kind: content.kind, acceptKey: content.kind === 'llm' ? content.acceptKey : undefined });
 
 /**
  * overlay 绘制所需的最小形状（{@link decideOverlayPaint} 的入参）。
@@ -1208,6 +1269,32 @@ class GhostOverlay {
     return true;
   }
 
+  /**
+   * 浮层**此刻真的画在屏幕上**的那段文本（#166 方案 B1 的判据输入）。
+   *
+   * ⚠️ 这不是 `this.current` 的投影，而是**从节点上读回来**的：`current` 是内部状态，
+   * 采纳闸若拿它比 `accepted`，那两值都由同一份 content 推导，必然相等 —— 判据就成了
+   * 同义反复（实测：把屏幕上那句改掉之后 `current.text` 仍是槽里那条，闸放行、
+   * 草稿照样被整段覆盖）。读回来只碰本插件自己的节点，不是宿主 DOM 遍历。
+   *
+   * 口径与 {@link buildText} / {@link applyGrowthText} 的写入口一致：
+   *  - `llm`：整段文本写在节点自身的 `textContent` 上；
+   *  - `history` / `inline`：只把**后缀**装进第一枚子节点。
+   */
+  get paintedText(): string | null {
+    // ⚠️ 判据只认**节点上真的写着什么**，不叠加 `painted` / `isConnected` 这类状态位：
+    // 采纳那一刻节点可能恰好处在「被宿主摘走 → 下一帧 ensureMounted 挂回」的缝里，
+    // 而屏幕上画的是哪句与本节点此刻有没有挂上是两件事（#166 的取证就踩过这个坑：
+    // 把 `isPainted` 叠进来之后，浮层自检不过的主体上「屏幕文本」恒为 null，
+    // 采纳闸一律判 not-painted —— 那不是修好，是把原来的采纳一起关掉了）。
+    //
+    // 「没画」由调用方用 `overlay.isPainted` 与这里返回的空串/`null` 分别表达，
+    // 判定本体（accept-source.ts）只认文本。
+    if (this.current !== null && this.current.kind === 'llm') return this.el.textContent ?? '';
+    const holder = this.el.firstElementChild;
+    return holder === null ? '' : (holder.textContent ?? '');
+  }
+
   /** 屏幕上是否正有一枚「靠增长快路径维持」的幽灵（错峰补渲染据此让路）。 */
   get growing(): boolean {
     return this.painted && this.lastPaintWasGrowth;
@@ -1387,6 +1474,43 @@ function applyBody(ctx: Context): void {
     }
   };
   const keyHintNow = (): KeyHintInput | null => keyHintValue;
+  // ── #165：生成失败的**一次性静默指示** ──────────────────────────────────────
+  //
+  // 为什么与键位提示同槽位（`conversation.input.overlay`）：那条槽位是零高度的
+  // 绝对定位锚点，子项**不占垂直空间、不抢布局、不可能压到正文**，正是社区评审
+  // 原则 1 要的「静默」——不弹窗、不抢焦点、不需要用户点掉。
+  //
+  // 「一次性」是结构性的：失败摘要来自宿主**单次** `_push`，下一次成功推送带上
+  // 建议、不再带 `error` 键 ⇒ 这里被清空。它不是通知中心，也没有任何定时器。
+  let failureNote: SuggestionFailureNote | null = null;
+  const failureSubs = new Set<() => void>();
+  const notifyFailure = (): void => {
+    for (const fn of [...failureSubs]) {
+      try { fn(); } catch { /* 单个订阅者抛错不能影响其它订阅者，也不能中断渲染路径 */ }
+    }
+  };
+  /**
+   * 记一次失败（理由已由 {@link suggestionFailureReason} 归一）。
+   *
+   * 值未变时**不通知**：宿主的 `_push` 是省略式拼装，同一失败可能连续出现
+   * （例如某一回合的后续推送仍携带同一个 error），重复通知只是让 React 白跑。
+   */
+  const noteSuggestionFailure = (reason: string): void => {
+    if (failureNote?.reason === reason) return;
+    failureNote = { reason };
+    notifyFailure();
+  };
+  /** 问题解除（成功推送到了）⇒ 收回指示。没有指示时什么都不做。 */
+  const clearSuggestionFailure = (): void => {
+    if (failureNote === null) return;
+    failureNote = null;
+    notifyFailure();
+  };
+  const failureNow = (): SuggestionFailureNote | null => failureNote;
+  const subscribeFailure = (fn: () => void): (() => void) => {
+    failureSubs.add(fn);
+    return () => { failureSubs.delete(fn); };
+  };
   /**
    * 当前界面语言（提示行文案用）。
    *
@@ -1468,6 +1592,10 @@ function applyBody(ctx: Context): void {
     'regen-requested': null,
     'deferred-repaint': null,
     'push-cell': null,
+    // #165：宿主推来的生成失败摘要（`_push.error`）**首次出现 / 理由变化**时打一行。
+    // 进故障槽（warn，默认可见）：它正是过去「整类静默全灭」时唯一该有的线索。
+    // 同一理由连打由 `traceOnce` 的理由闸挡住，所以一次风暴不刷屏。
+    'suggestion-failed': null,
   };
   /**
    * 槽级冷却状态（与 `traceGates` 正交：理由闸管「同理由连打」，冷却闸管「换理由连打」）。
@@ -2128,7 +2256,7 @@ function applyBody(ctx: Context): void {
     if (overlay.isPainted && settings.showKeyHint) {
       setKeyHint({
         kind: content.kind,
-        acceptKey: content.kind === 'llm' ? content.acceptKey : DEFAULT_ACCEPT_KEY,
+        acceptKey: acceptKeyOfContent(content),
         regenKey: settings.regenKey,
         wordAccept: settings.wordAccept,
         regenEnabled: settings.regenEnabled,
@@ -2801,6 +2929,29 @@ function applyBody(ctx: Context): void {
               ? settings.completionSessionId
               : (typeof pushed.completionSessionId === 'string' ? pushed.completionSessionId : null),
           };
+          // ── #165：把宿主早已推过来的失败摘要**读出来**。──────────────
+          //
+          // 位置在这里、而不是 `next` 的某个字段里：失败摘要不是配置值，进 `next`
+          // 就会参与 `configValuesEqual` 的深比较，于是「同一句错误从两次相邻推送
+          // 各来一遍」会变成两次 settingsEpoch++（正是 #21 那条读侧放大）。
+          //
+          // 三件事，都只读不写：
+          //  1. `traceOnce('suggestion-failed', …)` —— 按**理由变化**才打；
+          //  2. 一次性静默指示（`noteSuggestionFailure`，不弹窗、不抢焦点）；
+          //  3. 没有失败键时把指示与槽位一起复位（问题解除 ⇒ 下一次失败能再打一行）。
+          const pushError = typeof pushed?.error === 'string' && pushed.error.trim() !== ''
+            ? pushed.error.trim()
+            : null;
+          if (pushError !== null) {
+            const reason = suggestionFailureReason(pushError);
+            traceOnce('suggestion-failed', reason, ` chars=${pushError.length}`);
+            noteSuggestionFailure(reason);
+          } else {
+            // 只在这一格确实被重读过时才复位（`pushCellChanged`）：未变的建议格
+            // 沿用的是上一次的解析结果，拿它当「这次没失败」会把指示误清。
+            if (pushCellChanged) clearSuggestionFailure();
+            traceClear('suggestion-failed', null);
+          }
           // **值未变则整条链路止步**（#21 待查项 2 的读侧放大）：内核事件只带
           // `(ns, revision)`，revision 推进不代表本插件关心的东西变了——host 每分钟
           // 数十次的 `_push` 里大部分字段常年不变，而旧代码无条件替换 `settings` 对象
@@ -2901,8 +3052,31 @@ function applyBody(ctx: Context): void {
     applySettings();
   }
 
-  /** Tab（或配置键）整条采纳；幽灵显示时裸 → 逐词采纳。 */
+  /**
+   * Tab（或配置键）整条采纳；幽灵显示时裸 → 逐词采纳。
+   *
+   * ## 按键所有权（Gitea #166 方案 A）
+   *
+   * 本处理器注册在**冒泡阶段**（见下方的 `addEventListener`），不是 window 捕获。
+   * 语义因此从「**Tab 永远采纳**」降级为「**没有别人认领 Tab 时才采纳**」：
+   *
+   *  - 冒泡阶段意味着宿主 composer 与其它插件的 target/bubble 处理器**先跑**；
+   *    任一方对 Tab/`→` 调过 `preventDefault()`（弹层确认、候选采纳、插入制表符…），
+   *    这里第一句 `defaultPrevented` 就 return——不写草稿、不 stopPropagation、
+   *    也不代它 preventDefault（那个键归它，默认动作由它决定）。
+   *  - 代价（如实记）：若其它插件在 **window 捕获**阶段抢跑，本改动不解决它们的抢占
+   *    ——那是它们不守 `defaultPrevented` 契约，不该由本插件的捕获来对冲（#166 方案 A）。
+   *  - 反向风险：宿主 composer 自己在**冒泡**里 `stopPropagation()` ⇒ 本处理器拿不到事件
+   *    ⇒ 采纳彻底失效。这一条是迁移前必须实测定量的东西，证据见
+   *    `scripts/tab-ownership-smoke.mjs` 与 PR 描述。
+   *
+   * composition 事件仍走捕获（`:3180` 那条成文理由只对 composition 成立），见注册处。
+   */
   const onKeyDown = (event: KeyboardEvent): void => {
+    // ── #166 让路优先 ────────────────────────────────────────────────────────
+    // 必须排在最前：放在 `isComposing`/`shown` 之后也"能用"，但那会让一次别人已认领
+    // 的按键走进下面的焦点判定，读起来像本插件还在处理它。先声明立场再谈条件。
+    if (shouldYieldKey(event)) return;
     if (event.isComposing) return;
     if (shown === null) return;
     // 焦点必须在会话输入框内（textarea 或 0.1.2 contenteditable composer）。
@@ -2913,25 +3087,38 @@ function applyBody(ctx: Context): void {
     const content = shown.content;
     // CAS 基线：这份 content **计算时**所用的草稿快照（文本 + 宿主 draftRev）。
     const base = shown.base;
-    const acceptKey = content.kind === 'llm' ? content.acceptKey : DEFAULT_ACCEPT_KEY;
+    const acceptKey = acceptKeyOfContent(content);
     // ── #127 换一条（regen）──────────────────────────────────────────────────
     // 只在幽灵在屏时可用（`shown !== null` 是 `onKeyDown` 的头一道门）。**排在采纳闸之前**：
     // 若把 regen 键与 acceptKey 配成同一个键，采纳优先是本仓既有语义（Tab 永远采纳），
     // 而 regen 是**新增**入口，不该抢走用户已经习惯的那一个。
-    // 与 `acceptKey` 不同，regen **吞按键**（preventDefault）：否则 `Alt+G` 在某些宿主组合上
-    // 会落到浏览器 / 系统的原生动作上（例如带 Alt 的菜单快捷键），那是用户没要的副作用。
+    // 与 `acceptKey` 不同，regen 在**真的要执行动作**时吞按键（preventDefault）：否则
+    // `Alt+G` 在某些宿主组合上会落到浏览器 / 系统的原生动作上（例如带 Alt 的菜单快捷键），
+    // 那是用户没要的副作用。
+    //
+    // ⚠️ 这条吞键理由**只对「我们要执行动作」的分支成立**（Gitea #168）。顺序曾经是先吞键
+    // 再判 kind：非 llm 形态下用户按下 `Alt+G`，屏幕上什么都没发生、键也到不了输入框，
+    // 只留一条 debug trace —— 而 `key-hint-text.ts` 的「换一条」段本就只在 llm 形态显示，
+    // 等于用户在**没有任何界面元素声称这个键有用**的形态上被吞了键，连「我们在处理它」
+    // 的借口都没有。现在先判 kind：非 llm 一律不碰事件，按键回到原生行为（插入字符 /
+    // 移焦点 / 其它组件的处理），与同函数采纳支的 #38 闸（「此刻没有可采纳的幽灵」就不
+    // 吞键）对齐到同一句判据。不执行动作时把键吞掉，副作用只是从「落到原生动作」变成
+    // 「什么都不发生」，后者并不更安全，只是更难诊断。
     if (settings.regenEnabled) {
       const regenMatcher = parseAcceptKey(settings.regenKey);
       if (regenMatcher !== undefined && regenMatcher(event)) {
-        event.preventDefault();
-        event.stopPropagation();
-        if (content.kind === 'llm') {
+        if (content.kind !== 'llm') {
           // 只对 LLM 建议有意义：历史补全/续写是本地即时算出的，没有"再要一条"这种语义
           // （它们的候选集合由历史环与草稿决定，重出的结果必然是同一份）。
-          requestRegen(content, base);
-        } else {
+          // 这条 trace 是这一支**唯一**的观测面（`traceOnce` 按理由变化才打，不刷屏）。
+          // 注意：这里**不** `preventDefault` / `stopPropagation`，也不 `return` 之外的动作
+          // —— 事件必须原样交还给宿主与其它处理器（#168 的验收判据）。
           traceOnce('regen-skipped', 'not-llm', ` kind=${content.kind}`);
+          return;
         }
+        event.preventDefault();
+        event.stopPropagation();
+        requestRegen(content, base);
         return;
       }
     }
@@ -2951,6 +3138,35 @@ function applyBody(ctx: Context): void {
         return;
       }
       traceClear('accept-gate-tab', null);
+      // ── #166 方案 B1：同源闸（屏幕上的那句 vs 要写入的那句）──────────────────
+      // 排在帧闸之后、`preventDefault` 与 CAS **之前**，理由与 #38 那条一模一样：
+      // 判据不通过时这一下按键归回浏览器（不吞键、不写字），比「按了没反应」诚实。
+      //
+      // 它拦的场景是 #166 的正体：浮层画的 X 与槽里的 content Y 不是同一份时（第三方
+      // 输入预测插件的候选被本插件整段覆盖、`overlay.current` 与 `shown` 错帧、自检
+      // 之后又换了内容……），采纳 Y 就是把用户没看见的句子写进输入框。判据本体在
+      // `accept-source.ts`（纯逻辑、零 DOM）；这里只负责在同一时点取两份值。
+      //
+      // ⚠️ 两条值必须来自**两条独立的路径**：`accepted` 由 `content` + `base.draft`
+      // 推导，而「画的那句」从**节点上读回来**（`overlay.paintedText`）。拿 `shown.content`
+      // 去比就是同义反复 —— 那是本站真踩过的一次（见 `paintedText` 的注释）。
+      const accepted = buildFullAccept(content, base.draft);
+      const source = acceptSourceVerdict({
+        // ⚠️ 取**节点上真画出来的那段**（`paintedText`），不是内部状态 `shown.content`：
+        // 后者与 `accepted` 同源推导，拿它比等于同义反复（#166 B1 的本意是校验
+        // 「屏幕上的那句是不是我要写的那句」）。
+        paintedText: overlay.paintedText,
+        paintedContent: shown.content,
+        accepted,
+      });
+      if (!source.allow) {
+        traceOnce('tab-abandon', source.reason ?? 'unknown',
+          ` kind=${content.kind} paintedChars=${source.paintedChars}`
+          + ` acceptedChars=${source.acceptedChars} draftChars=${base.draft.length}`
+          + ` ${frameHintFields(content.frame)}`);
+        return;
+      }
+      traceClear('tab-abandon', null);
       event.preventDefault();
       event.stopPropagation();
       if (bound !== null) {
@@ -2965,7 +3181,7 @@ function applyBody(ctx: Context): void {
         // 等值，判据见 accept-guard.ts）。一旦漂移，说明用户在这两步之间又打
         // 了字——本次采纳**整段放弃**，一个字符都不写，新输入原样留在草稿里；
         // 幽灵照旧收掉（下一次 render 会按新草稿重新出建议）。
-        const accepted = buildFullAccept(content, base.draft);
+        // `accepted` 已在同源闸之前算好（同一个 `base.draft`，逐字等价）。
         const input = bound.input;
         const outcome = commitDraftIfPristine(
           base,
@@ -3019,9 +3235,27 @@ function applyBody(ctx: Context): void {
       if (!full.startsWith(matchBase) || matchBase.length >= full.length) return;
       const chunk = nextAcceptChunk(full.slice(matchBase.length));
       if (chunk === '') return;
+      // ── #166 方案 B1：逐词路径同一条同源闸 ──────────────────────────────────
+      // 同一个道理，且这一支的**新增字符**（`chunk`）同样可能来自一条屏幕上看不见的
+      // 后缀。判据与整条采纳共用 `acceptSourceVerdict`（一处判据，禁止两份拼写）；
+      // `buildWordAccept(...)` 的结果必然以 `full` 收尾，所以通过闸的一帧上
+      // 「画的后缀」与「写进去的后缀」同时被校验到。
+      const accepted = buildWordAccept(content, base.draft, matchBase, chunk);
+      const wordSource = acceptSourceVerdict({
+        paintedText: overlay.paintedText,
+        paintedContent: shown.content,
+        accepted,
+      });
+      if (!wordSource.allow) {
+        traceOnce('word-abandon', wordSource.reason ?? 'unknown',
+          ` kind=${content.kind} chunkChars=${chunk.length}`
+          + ` paintedChars=${wordSource.paintedChars} acceptedChars=${wordSource.acceptedChars}`
+          + ` draftChars=${base.draft.length} ${frameHintFields(content.frame)}`);
+        return;
+      }
+      traceClear('word-abandon', null);
       event.preventDefault();
       event.stopPropagation();
-      const accepted = buildWordAccept(content, base.draft, matchBase, chunk);
       if (bound !== null) {
         // 与整条采纳同一条 CAS 判据（#4）：草稿在计算与写入之间被改过就放弃，
         // 不写任何字符，并收掉幽灵。
@@ -3140,8 +3374,13 @@ function applyBody(ctx: Context): void {
       renderTraced('other');
     };
     const unList = sessions.list.subscribe(onList);
-    // IME 组词抑制：捕获监听（编辑器内组合事件会冒泡到 window）。组词开始
+    // IME 组词抑制：**捕获**监听（编辑器内组合事件会冒泡到 window）。组词开始
     // 立即隐藏幽灵；结束（候选上屏）后按已提交草稿重新渲染。
+    //
+    // ⚠️ 这条捕获标记只对 **composition** 成立，别拿它给 keydown 背书（Gitea #166 证据 2）。
+    // composition 事件在某些 IME/宿主组合上会在编辑器内被 `stopPropagation` 截住，
+    // 而「组词期间不许画幽灵」是**我们自己的状态**，必须在最外层确知——晚了就是一帧
+    // 组词文本被当成草稿画上灰字。keydown 相反：它要**让路**，所以走冒泡（见下）。
     const onCompositionStart = (): void => {
       composing = true;
       renderTraced('other');
@@ -3150,7 +3389,19 @@ function applyBody(ctx: Context): void {
       composing = false;
       renderTraced('other');
     };
-    window.addEventListener('keydown', onKeyDown, true);
+    // ── Gitea #166 方案 A：keydown 从 window **捕获**改到 window **冒泡** ──────
+    //
+    // 旧的 `addEventListener('keydown', onKeyDown, true)` 让本插件跑在宿主与所有
+    // 其它插件之前，且当时全仓没有 `defaultPrevented` 判据 ⇒ 第三方输入预测弹层
+    // 刚把候选「认领」走，Tab 照样被本插件抢去采纳自己槽里那条，整段覆盖输入框。
+    //
+    // 改到冒泡后：事件先经宿主 composer 与其它插件的 target/bubble 处理器，本处理器
+    // 最后跑（此时 `defaultPrevented` 才有意义，见 `onKeyDown` 第一句）。
+    // 冒泡按「由内向外」传递，诉求是「按内层 owner → 外层插件」的顺序，冒泡正是那个顺序；
+    // 注册在 window 而不是编辑器节点上，是因为编辑器节点会被宿主重建（引用会漂）；
+    // window 直接子级的 `stopPropagation` 会**先于**本处理器挡住它。这就是本改动
+    // 唯一的高风险面，已由 `scripts/tab-ownership-smoke.mjs` 的 C/D 段逐条实测。
+    window.addEventListener('keydown', onKeyDown);
     window.addEventListener('compositionstart', onCompositionStart, true);
     window.addEventListener('compositionend', onCompositionEnd, true);
     return () => {
@@ -3171,7 +3422,10 @@ function applyBody(ctx: Context): void {
       traceClear('inline-arm-cancel', null);
       traceClear('form-hold', null);
       traceClear('deferred-repaint', null);
-      window.removeEventListener('keydown', onKeyDown, true);
+      // ⚠️ 第三个参数必须与注册处**逐字一致**：`removeEventListener` 只按
+      // (type, listener, capture标志) 匹配，标志不同的移除是**静默空操作**。
+      // 这里少了 `true` 的话冒泡监听会一直挂着（路由切换后重复消费同一个键）。
+      window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('compositionstart', onCompositionStart, true);
       window.removeEventListener('compositionend', onCompositionEnd, true);
       overlay.dispose();
@@ -3284,6 +3538,25 @@ function applyBody(ctx: Context): void {
       }, KeyHintBarSlot),
     );
     ctx.effect(() => disposeKeyHint, 'dsh-suggest-ghost: input overlay key hint');
+    // #165：失败指示注册在**同一条槽位**上，`id` / `order` 与键位提示错开。
+    // 两者互斥是结构性的（键位提示只在幽灵真的画出来时出现，失败指示出现的时刻
+    // 正是没有幽灵），所以天然不会叠在一起；用不同 id 只是让 DOM 里可分辨。
+    const disposeFailureNote = (ctx as any).slots.inject('conversation.input.overlay', () =>
+      (ctx as any).slots.register({
+        name: 'conversation.input.overlay',
+        id: 'suggest-ghost-failure-note',
+        // 键位提示是 200；失败指示排在它之前（更靠锚点内侧），即使两者同时在场
+        // 也不会互相覆盖（两者都是 `top:0`，所以顺序只影响无障碍读取次序）。
+        order: 199,
+        inject: () => ({
+          failureNow,
+          subscribe: subscribeFailure,
+          // 语言随帧现读：与键位提示同规，改界面语言后下一次推送就是新文案。
+          get lang() { return activeLang(); },
+        }),
+      }, FailureNote),
+    );
+    ctx.effect(() => disposeFailureNote, 'dsh-suggest-ghost: input overlay failure note');
   }
 
   const remoteForCard = remoteOf(ctx);
