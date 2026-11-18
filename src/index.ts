@@ -3595,8 +3595,28 @@ export function apply(ctx: Context, config: GenerateConfig): void {
       providers: () => llm?.listProviders?.() ?? [],
       models: (provider: string) => llm?.listModels?.(provider) ?? [],
       // 档位不在 listModels 的行里（实测行只有 id/name）⇒ 必须走精确 provider/model 的解析。
-      efforts: (provider: string, model: string) =>
-        (llm as unknown as { resolveModel?: (p: string, m: string) => unknown })?.resolveModel?.(provider, model) ?? null,
+      //
+      // ⚠️ **方法名是 `resolveModelInfo`，不是 `resolveModel`**（#175）。两者在宿主里
+      // 分属两个不同的对象：`resolveModel` 是 **LlmAdapter 基类**上的方法（"这个适配器
+      // 怎么解析这一个模型"），而服务对象（`ctx.llm`）暴露的是 `resolveModelInfo`
+      // （"帮我去问那个适配器，并把结果规范化"）。调用点写错名字 ⇒ 可选链整段短路成
+      // `undefined` ⇒ `?? null` ⇒ handler 拿到 null ⇒ `efforts` 恒为 `[]`，
+      // **而全链路一声 warn 都没有**（`safeRows` 只在源**抛错**时留痕，静默 undefined
+      // 不算抛错）。实际观测：GUI 里档位选择器正常（宿主自己读 adapter），但插件这条
+      // 目录路由把 6 个模型的档位全报成空。
+      //
+      // 保留对旧名 `resolveModel` 的回落只为**向后兼容**：`resolveModelInfo` 在实测的
+      // 14 个内核版本（0.1.2-rc.1 … 0.2.2-rc.4）里都在，故回落是死路，写它是为了让
+      // "某版本把服务端改回短名"这种未来变化不至于又静默全灭。
+      efforts: (provider: string, model: string) => {
+        const service = llm as unknown as {
+          resolveModelInfo?: (p: string, m: string) => unknown;
+          resolveModel?: (p: string, m: string) => unknown;
+        } | undefined;
+        return service?.resolveModelInfo?.(provider, model)
+          ?? service?.resolveModel?.(provider, model)
+          ?? null;
+      },
     };
     try {
       server.register({
