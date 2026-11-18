@@ -227,6 +227,15 @@ export interface StreamMetrics {
      * 由冒烟与后续诊断读它，不改既有行。
      */
     maxTokensEscalated: boolean;
+    /**
+     * #165：放大**发生过的次数**（0/1/2/3…；默认 512 最多 3 次到 ceiling）。
+     *
+     * 与 `maxTokensEscalated`（布尔，只回答"放大过没有"）并存：布尔量是既有的
+     * 观测契约（冒烟与外部诊断读它，**不许改语义**），计数是新增的诊断面。
+     * 「只放大一次」改成「连续放大到 ceiling」之后，光看布尔量已经分不出
+     * 「一跳就够」和「连跳三次才够」——而这正是判断定价是否合理要看的东西。
+     */
+    maxTokensEscalationCount: number;
     /** #165：**本次尝试实际请求的**输出预算（用于把两笔账分开，同样不进留痕行）。 */
     maxTokens: number;
     /** 本次调用的收口分类，用于区分「空回复」与「被过滤」。 */
@@ -376,13 +385,15 @@ export declare function deploymentRoute(ctx: {
  */
 export declare const MAX_TOKENS_STOP_CODE = "SUGGEST_GHOST_MAX_TOKENS";
 /**
- * 放大后的**硬上限**（放大一次的落点不超过它）。
+ * 放大后的**硬上限**（任何一跳的落点都不超过它）。
  *
  * 为什么有上限：`maxOutputTokens` 是用户可配项，计费与它直接挂钩。没有上限时
- * 「2 倍」会随用户配的基数一起漂（配 30_000 ⇒ 放大到 60_000），而这条路是**自动
- * 触发的、用户看不见的**，不该把任何一次自动化决策推到六位数 token。4096 是
+ * 连续放大会让**自动触发的、用户看不见的**这条路无限烧 token。4096 是
  * 「一条 240 字的建议 + 充足的思考预算」的宽松上界（建议正文按 `maxSuggestionChars`
  * 默认 240 字符算不到 100 字 token）。
+ *
+ * 实测（盒子上 `deepseek-v4.1-flash` + `high`，见 `escalateMaxTokens` 上方那段）：
+ * 512/1024/2048 全部 `choices: []`，**只有 4096 能出结果**。这个上限正好是它的落点。
  *
  * ⚠️ 上限只压**放大后的落点**，不压用户自己配的基数（配了 8_000 就跑 8_000）——
  * 本改动不改任何默认值语义（issue 方案 1「预算随能力」明确另议）。
@@ -399,14 +410,37 @@ export declare function isMaxTokensStop(error: unknown): boolean;
 /**
  * 算出撞顶后要放大的预算；`undefined` = **不放**（这次就按失败处理）。
  *
- * 三条停止条件缺一不可，缺了任何一条都会变成烧 token 的死循环：
- *  1. 本次生成**已经放大过**（`escalated`）⇒ 不再放大，交回常规失败路径；
- *  2. 当前预算已是（或超过）{@link MAX_TOKENS_ESCALATION_CEILING} ⇒ 放大也不涨，不放；
- *  3. 放大后的值**必须严格大于**当前值 ⇒ 否则等于原地重放同一份预算。
+ * ## 为什么不再「只放大一次」（#165 方案 (a)）
+ *
+ * 原实现把幂等性写在**布尔闸门**上：放大过一次就 `undefined`，于是默认
+ * 512 只会走到 1024。实测（盒子真推理模型 `deepseek-v4.1-flash` +
+ * `reasoningEffort: high`，直连 provider 只改 `max_tokens`）：
+ *
+ * ```
+ * max_tokens= 512 → choices=0  completion=512   content 0 字
+ * max_tokens=1024 → choices=0  completion=1024  content 0 字
+ * max_tokens=2048 → choices=0  completion=2048  content 0 字
+ * max_tokens=4096 → choices=1  completion=3615  content 3924 字
+ * ```
+ *
+ * 即 **1024 这一跳救不回来**：推理把预算吃光时连一个 choice 都拼不出来。
+ * 而 {@link MAX_TOKENS_ESCALATION_CEILING}（4096）恰好是它能出结果的档位，
+ * 却因为「只放大一次」永远走不到。所以改成**几何递增直到 ceiling**。
+ *
+ * ## 停止条件（两条，缺一不可）
+ *
+ *  1. 当前预算已是（或超过）{@link MAX_TOKENS_ESCALATION_CEILING} ⇒ 放大也不涨；
+ *  2. 放大后的值**必须严格大于**当前值 ⇒ 否则等于原地重放同一份预算。
+ *
+ * **为什么这已经足够防死循环**（不需要再加一个「最多放大 N 次」的常数闸门）：
+ * 预算是整数，每次放大至少 +1（`Math.floor(current * 2) ≥ current + 1` 对任意
+ * 正整数成立），且被 ceiling 封顶。所以从任意起点出发，放大步数是
+ * `log2(ceiling / current)` 的整数上界 —— 从默认 512 起**恰好 3 步**
+ * （512 → 1024 → 2048 → 4096）。这条上界由结构给出，不是靠次数算术碰巧对上。
  *
  * 纯函数（可离线驱动，见 `scripts/max-tokens-smoke.mjs`）。
  */
-export declare function escalateMaxTokens(current: number, escalated: boolean): number | undefined;
+export declare function escalateMaxTokens(current: number): number | undefined;
 /**
  * 为一个已完成回合生成建议。模型产出空或不合格回复 = 无建议（静默返回
  * undefined），真实失败抛错。
