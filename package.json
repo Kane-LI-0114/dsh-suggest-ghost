@@ -1,6 +1,6 @@
 {
   "name": "dsh-suggest-ghost",
-  "version": "0.11.1-alpha.1",
+  "version": "0.11.1",
   "description": "给 DSH 输入框加上输入预测：回合结束后自动建议你的下一句话，Tab 一键采纳；输入时按会话历史做前缀补全。输入预测 / 自动补全。",
   "author": "WuJiaoJue",
   "license": "MIT",
@@ -27,11 +27,26 @@
   "files": [
     "icon.svg",
     "lib",
-    "docs",
     "cordis.patch.yml",
     "README.md",
     "README.en.md",
-    "LICENSE"
+    "LICENSE",
+    "docs/banner.png",
+    "docs/demo.gif",
+    "docs/logo-peek.png",
+    "docs/mode-history-real.png",
+    "docs/mode-llm-real.png",
+    "docs/settings-card.png",
+    "docs/gitea-workflow.md",
+    "docs/internals-cordis-settings-pitfalls.md",
+    "docs/issue-draft-overlay-mount.md",
+    "docs/upstream-feedback-settings-proxy.md",
+    "docs/pull-ack-investigation.md",
+    "docs/outreach-plugin-dev-loop.md",
+    "docs/pending-indicator-measurement.md",
+    "docs/real-session-harness.md",
+    "docs/scaffold-input-face.md",
+    "docs/rewrite-p0-findings.md"
   ],
   "screenshots": [
     {
