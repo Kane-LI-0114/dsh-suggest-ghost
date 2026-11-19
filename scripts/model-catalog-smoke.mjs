@@ -206,6 +206,39 @@ check('3b 目录模块本身零宿主依赖（纯函数，拿不到会话面）'
     `model-catalog 引入了宿主包 ⇒ 它就可能拿到会话面：\n${src.split('\n').filter(l => /require\(|from /.test(l)).join('\n')}`);
 });
 
+// ── 3c）档位数据源**必须**调用宿主服务的真名（#175）──────────────────────────
+//
+// 这一条是 #175 的回归闸。上面 4a–4d 都直接喂 `sources.efforts`，**永远看不到**
+// 接线里到底调了宿主的哪个方法名 —— 所以接线写成 `resolveModel`（适配器基类的名字，
+// 服务对象上根本没有）时，4a–4d 全绿，而线上 `efforts` 恒为 `[]`、一声 warn 都没有
+// （`safeRows` 只对**抛错**留痕，静默 undefined 不算抛错）。
+//
+// 闸的形态：在产物里取接线块，只扫代码（去注释），断言它引用 `resolveModelInfo`。
+// 断言的**理由**不是"这个名字好看"，而是它由宿主的 d.ts 钉死：
+// `LlmService.resolveModelInfo(provider, model, signal)` 在 0.1.2-rc.1 … 0.2.2-rc.4
+// 全部存在，而 `resolveModel` 只存在于 `LlmAdapter`（适配器怎么解析模型），
+// 服务对象上没有。名字写错不会报错、不会抛异常，只会静默退化 —— 正是这条闸要拦的。
+await check('3c 档位数据源调用宿主服务的真名 resolveModelInfo（不是适配器的 resolveModel）', () => {
+  const src = readFileSync(join(process.cwd(), 'lib', 'index.js'), 'utf8');
+  // 锚点取**代码里的** `efforts:`（产物缩进），不是注释里的字眼：注释里也写着
+  // `resolveModelInfo`（留痕说明），拿它当锚点会让这条闸在注释变动时误报/漏报。
+  const at = src.indexOf('efforts: (provider');
+  assert.ok(at > 0, 'lib/index.js 里找不到档位数据源的接线（产物没重建？）');
+  // 块尾：下一个 `};`（sources 对象的结束）—— 只在这段里找方法名。
+  const tail = src.indexOf('};', at);
+  assert.ok(tail > at, '取不出档位接线块的结束位置');
+  const block = src.slice(at, tail);
+  const code = block.split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
+  assert.ok(/service\?\.resolveModelInfo\?\./.test(code),
+    `接线没有调用宿主服务的真名 resolveModelInfo（#175 回归，档位会恒定为空且无 warn）：\n${code.slice(0, 400)}`);
+  // 回落（若有）必须排在真名**之后**：先调旧名会让真名永远轮不到。
+  const oldAt = code.indexOf('service?.resolveModel?.');
+  if (oldAt >= 0) {
+    const newAt = code.indexOf('service?.resolveModelInfo?.');
+    assert.ok(newAt < oldAt, `回落排到了真名之前（先调旧名 ⇒ 真名永远轮不到）：\n${code.slice(0, 400)}`);
+  }
+});
+
 // ── 4) 档位分支（#50）：同样的三层口径 ─────────────────────────────
 await check('4a 档位投影：只放行 id/name/description，投毒字段一个都不吐', async () => {
   const handler = createModelCatalogHandler({ sources: {
