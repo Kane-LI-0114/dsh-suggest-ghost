@@ -8,3 +8,7 @@ scripts/cross-kernel/.work/
 # `worktree add wt/<名字>`，而这里没有 wt/ 条目 ⇒ worktree 以未跟踪目录留在 live 主仓里，
 # 正好叠在「不许 git add -A」那条已知风险上（Gitea #128 的 §4 勘误）。
 wt/
+
+# agent 会话产物（证据截图、草稿、临时 worktree）。证据要不要入库是产品决定，
+# 现状：scratch/evidence 留盘但**不入库**（1.9M 二进制截图会把 diff 撑爆）。
+.agents/
