@@ -234,6 +234,28 @@ export const KERNEL_GENERATIONS = [
       'peerDependencies 补 `^0.2.2-alpha.2`。' +
       '本代是 rc：**不构成对 0.2.2 正式版的承诺**，正式版发布后要另登一条重跑才有结论。',
   },
+  {
+    // 用户在 2026-11-20 把宿主从 0.2.2-rc.4 升到 rc.5 后登记。
+    //
+    // 登这一代的直接理由：**默认落脚点变了**。rc.5 是当前实际在跑的宿主，
+    // 而矩阵此前只到 rc.1 —— 等于"用户正在用的那一代"没有验证记录。
+    // 真 GUI 面没有重跑（见 notes），所以这条 GREEN 只覆盖装配/门禁/类型/投影四面。
+    id: '0.2.2-rc.5',
+    peerRange: '^0.2.2-alpha.2',
+    bootModel: 'app-boot',
+    hasAppBoot: true,
+    hasDshBase: true,
+    observedEntries: 338,
+    notes:
+      '2026-11-20 现场安装并逐包核对：`@deepseek-ai` 共 338 项，其中 **327 项为 0.2.2-rc.5**，' +
+      '其余为非同族包（libreoffice-kit/libreoffice-kit-wasm 0.2.3、cordis 4.1.0、' +
+      'cosmokit 1.9.0、schemastery 3.19.0 等，各按自己的版本线走，不是混版）。' +
+      'dsh / dsh-app-boot / dsh-base / dsh-llm / dsh-session 五个被测包**全部 0.2.2-rc.5**。' +
+      '`^0.2.2-alpha.2` 在默认与 includePrerelease 两种语义下都匹配本代（已实测）。' +
+      'rc.5 的 dsh-app-boot **有** `evaluatePluginCompatibility`（4 处命中），门禁面可判。' +
+      '⚠️ 本代**未跑真 GUI 面**（见 docs/ 与 skill §0：装配绿不等于用户看得见）；' +
+      '本代是 rc：**不构成对 0.2.2 正式版的承诺**。',
+  },
 ];
 
 /** 只要 id 的纯字符串数组（顺序与 KERNEL_GENERATIONS 一致，供 --versions 校验与遍历用）。 */

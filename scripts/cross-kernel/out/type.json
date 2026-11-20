@@ -1,6 +1,6 @@
 {
   "task": "T-TYPE (task-3)",
-  "generatedAt": "2026-11-05T08:52:36.283Z",
+  "generatedAt": "2026-11-20T05:41:24.269Z",
   "repo": "/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost",
   "tsc": "/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/node_modules/.bin/tsc",
   "commands": {
@@ -11,6 +11,7 @@
   "pitfallsRecorded": [
     "tsconfig.json excludes src/client => the literal Face A command is a host-only green (verified via --listFiles: 16 src files, 0 client files).",
     "outside-pointing symlinks for peers produce a FALSE RED (18 phantom errors on 0.2.0-rc.2) via TS realpath/module-identity; peers must be materialized as real dirs.",
+    "peers carrying their own nested node_modules (dsh-storage-domain ships zod 4.6.6 from 0.2.2-rc.2 on, while this repo pins 4.4.3) give the SAME module two type identities -> FALSE RED (8 errors in hotness-store.ts). Controlled A/B: top4.4.3+nested4.6.6=8, top4.6.6+nested4.6.6=0, top4.6.7+none=0, top4.6.7+nested4.6.6=8. Not generation-specific: rc.2/rc.3/rc.4 would red identically. Nested node_modules are now stripped, so the reading is a single variable (which generation the peer .d.ts is).",
     "import.meta.resolve(spec, parentURL) ignores parentURL — unusable for rooted resolution.",
     "tree node_modules absence != runtime failure: the host __ModuleLoader__ seed table is consulted first.",
     "tree node_modules absence != never published: must check the npm registry separately."
@@ -24,16 +25,19 @@
     },
     "client": {
       "config": "tsconfig.client.json",
-      "errors": 8,
+      "errors": 11,
       "errorList": [
         "src/client/accept-guard.ts(51,36): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.",
         "src/client/chunk.ts(68,39): error TS2532: Object is possibly 'undefined'.",
         "src/client/chunk.ts(71,33): error TS2532: Object is possibly 'undefined'.",
         "src/client/history.ts(72,68): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.",
-        "src/client/index.ts(1791,13): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'.",
-        "src/client/index.ts(30,21): error TS2307: Cannot find module '@deepseek-ai/dsh-client-ui-conversation' or its corresponding type declarations.",
-        "src/client/index.ts(920,17): error TS18047: 'last.nodeValue' is possibly 'null'.",
-        "src/client/index.ts(99,59): error TS6142: Module './settings-card.js' was resolved to 'src/client/settings-card.tsx', but '--jsx' is not set."
+        "src/client/index.ts(103,59): error TS6142: Module './settings-card.js' was resolved to 'src/client/settings-card.tsx', but '--jsx' is not set.",
+        "src/client/index.ts(1057,17): error TS18047: 'last.nodeValue' is possibly 'null'.",
+        "src/client/index.ts(168,51): error TS6142: Module './key-hint-bar.js' was resolved to 'src/client/key-hint-bar.tsx', but '--jsx' is not set.",
+        "src/client/index.ts(169,57): error TS6142: Module './failure-note.js' was resolved to 'src/client/failure-note.tsx', but '--jsx' is not set.",
+        "src/client/index.ts(2171,17): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'.",
+        "src/client/index.ts(2250,13): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'.",
+        "src/client/index.ts(30,21): error TS2307: Cannot find module '@deepseek-ai/dsh-client-ui-conversation' or its corresponding type declarations."
       ]
     }
   },
@@ -45,12 +49,12 @@
     "peerDependencies": {
       "@deepseek-ai/cordis": "^4.0.1",
       "@deepseek-ai/cosmokit": "^1.8.5",
-      "@deepseek-ai/dsh-llm": "^0.1.2-rc.1 || ^0.1.5-rc.1 || ^0.1.7-rc.2 || ^0.2.0-rc.2",
-      "@deepseek-ai/dsh-session": "^0.1.2-rc.1 || ^0.1.5-rc.1 || ^0.1.7-rc.2 || ^0.2.0-rc.2",
-      "@deepseek-ai/dsh-session-projection": "^0.1.2-rc.1 || ^0.1.5-rc.1 || ^0.1.7-rc.2 || ^0.2.0-rc.2",
-      "@deepseek-ai/dsh-settings": "^0.1.2-rc.1 || ^0.1.5-rc.1 || ^0.1.7-rc.2 || ^0.2.0-rc.2",
-      "@deepseek-ai/dsh-storage-domain": "^0.1.2-rc.1 || ^0.1.5-rc.1 || ^0.1.7-rc.2 || ^0.2.0-rc.2",
-      "@deepseek-ai/dsh-timeout": "^0.1.2-rc.1 || ^0.1.5-rc.1 || ^0.1.7-rc.2 || ^0.2.0-rc.2",
+      "@deepseek-ai/dsh-llm": "^0.1.2-rc.1 || ^0.1.5-rc.1 || ^0.1.7-rc.2 || ^0.2.0-rc.2 || ^0.2.2-alpha.2",
+      "@deepseek-ai/dsh-session": "^0.1.2-rc.1 || ^0.1.5-rc.1 || ^0.1.7-rc.2 || ^0.2.0-rc.2 || ^0.2.2-alpha.2",
+      "@deepseek-ai/dsh-session-projection": "^0.1.2-rc.1 || ^0.1.5-rc.1 || ^0.1.7-rc.2 || ^0.2.0-rc.2 || ^0.2.2-alpha.2",
+      "@deepseek-ai/dsh-settings": "^0.1.2-rc.1 || ^0.1.5-rc.1 || ^0.1.7-rc.2 || ^0.2.0-rc.2 || ^0.2.2-alpha.2",
+      "@deepseek-ai/dsh-storage-domain": "^0.1.2-rc.1 || ^0.1.5-rc.1 || ^0.1.7-rc.2 || ^0.2.0-rc.2 || ^0.2.2-alpha.2",
+      "@deepseek-ai/dsh-timeout": "^0.1.2-rc.1 || ^0.1.5-rc.1 || ^0.1.7-rc.2 || ^0.2.0-rc.2 || ^0.2.2-alpha.2",
       "@deepseek-ai/schemastery": "^3.18.3",
       "zod": "^4.0.0"
     },
@@ -78,7 +82,8 @@
       },
       "faceA": {
         "overlayDir": "/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.1.2-rc.1",
-        "method": "isolated temp copy; peers materialized as REAL dirs via cp -rL (never outside-pointing symlinks — that produces a false red, see header §2)",
+        "method": "isolated temp copy; peers materialized as REAL dirs via cp -rL (never outside-pointing symlinks — that produces a false red, see header §2); nested node_modules stripped so each peer resolves the overlay-top copy (single type identity — see header §3)",
+        "dedupedNestedModules": [],
         "mountedPeers": {
           "dsh-llm": "0.1.2-rc.1",
           "dsh-session": "0.1.2-rc.1",
@@ -121,19 +126,22 @@
         "client": {
           "config": "tsconfig.client.json",
           "scope": "src/client only (exclude: [] override)",
-          "errors": 7,
+          "errors": 10,
           "errorList": [
             "src/client/accept-guard.ts(51,36): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.",
             "src/client/chunk.ts(68,39): error TS2532: Object is possibly 'undefined'.",
             "src/client/chunk.ts(71,33): error TS2532: Object is possibly 'undefined'.",
             "src/client/history.ts(72,68): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.",
-            "src/client/index.ts(1791,13): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'.",
-            "src/client/index.ts(920,17): error TS18047: 'last.nodeValue' is possibly 'null'.",
-            "src/client/index.ts(99,59): error TS6142: Module './settings-card.js' was resolved to 'src/client/settings-card.tsx', but '--jsx' is not set."
+            "src/client/index.ts(103,59): error TS6142: Module './settings-card.js' was resolved to 'src/client/settings-card.tsx', but '--jsx' is not set.",
+            "src/client/index.ts(1057,17): error TS18047: 'last.nodeValue' is possibly 'null'.",
+            "src/client/index.ts(168,51): error TS6142: Module './key-hint-bar.js' was resolved to 'src/client/key-hint-bar.tsx', but '--jsx' is not set.",
+            "src/client/index.ts(169,57): error TS6142: Module './failure-note.js' was resolved to 'src/client/failure-note.tsx', but '--jsx' is not set.",
+            "src/client/index.ts(2171,17): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'.",
+            "src/client/index.ts(2250,13): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'."
           ],
           "novelVsBaseline": [],
-          "baselineErrors": 8,
-          "raw": "src/client/accept-guard.ts(51,36): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\nsrc/client/chunk.ts(68,39): error TS2532: Object is possibly 'undefined'.\nsrc/client/chunk.ts(71,33): error TS2532: Object is possibly 'undefined'.\nsrc/client/history.ts(72,68): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\nsrc/client/index.ts(99,59): error TS6142: Module './settings-card.js' was resolved to '/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.1.2-rc.1/src/client/settings-card.tsx', but '--jsx' is not set.\nsrc/client/index.ts(920,17): error TS18047: 'last.nodeValue' is possibly 'null'.\nsrc/client/index.ts(1791,13): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'."
+          "baselineErrors": 11,
+          "raw": "src/client/accept-guard.ts(51,36): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\nsrc/client/chunk.ts(68,39): error TS2532: Object is possibly 'undefined'.\nsrc/client/chunk.ts(71,33): error TS2532: Object is possibly 'undefined'.\nsrc/client/history.ts(72,68): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\nsrc/client/index.ts(103,59): error TS6142: Module './settings-card.js' was resolved to '/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.1.2-rc.1/src/client/settings-card.tsx', but '--jsx' is not set.\nsrc/client/index.ts(168,51): error TS6142: Module './key-hint-bar.js' was resolved to '/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.1.2-rc.1/src/client/key-hint-bar.tsx', but '--jsx' is not set.\nsrc/client/index.ts(169,57): error TS6142: Module './failure-note.js' was resolved to '/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.1.2-rc.1/src/client/failure-note.tsx', but '--jsx' is not set.\nsrc/client/index.ts(1057,17): error TS18047: 'last.nodeValue' is possibly 'null'.\nsrc/client/index.ts(2171,17): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'.\nsrc/client/index.ts(2250,13): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'."
         }
       },
       "faceB": {
@@ -184,7 +192,7 @@
             "registry": {
               "checkedVersion": "0.1.2-rc.1",
               "published": true,
-              "versionCount": 43
+              "versionCount": 47
             },
             "declaredAsPeerDependency": false,
             "declaredAsDevDependency": true,
@@ -254,7 +262,59 @@
       },
       "faceA": {
         "overlayDir": "/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.1.5-rc.3",
-        "method": "isolated temp copy; peers materialized as REAL dirs via cp -rL (never outside-pointing symlinks — that produces a false red, see header §2)",
+        "method": "isolated temp copy; peers materialized as REAL dirs via cp -rL (never outside-pointing symlinks — that produces a false red, see header §2); nested node_modules stripped so each peer resolves the overlay-top copy (single type identity — see header §3)",
+        "dedupedNestedModules": [
+          {
+            "peer": "dsh-client-ui-conversation",
+            "dep": ".bin",
+            "version": null
+          },
+          {
+            "peer": "dsh-client-ui-settings",
+            "dep": ".bin",
+            "version": null
+          },
+          {
+            "peer": "dsh-llm",
+            "dep": ".bin",
+            "version": null
+          },
+          {
+            "peer": "dsh-session",
+            "dep": ".bin",
+            "version": null
+          },
+          {
+            "peer": "dsh-session-projection",
+            "dep": ".bin",
+            "version": null
+          },
+          {
+            "peer": "dsh-settings",
+            "dep": ".bin",
+            "version": null
+          },
+          {
+            "peer": "dsh-storage",
+            "dep": ".bin",
+            "version": null
+          },
+          {
+            "peer": "dsh-storage-domain",
+            "dep": ".bin",
+            "version": null
+          },
+          {
+            "peer": "dsh-storage-json",
+            "dep": ".bin",
+            "version": null
+          },
+          {
+            "peer": "dsh-timeout",
+            "dep": ".bin",
+            "version": null
+          }
+        ],
         "mountedPeers": {
           "dsh-llm": "0.1.5-rc.3",
           "dsh-session": "0.1.5-rc.3",
@@ -297,19 +357,22 @@
         "client": {
           "config": "tsconfig.client.json",
           "scope": "src/client only (exclude: [] override)",
-          "errors": 7,
+          "errors": 10,
           "errorList": [
             "src/client/accept-guard.ts(51,36): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.",
             "src/client/chunk.ts(68,39): error TS2532: Object is possibly 'undefined'.",
             "src/client/chunk.ts(71,33): error TS2532: Object is possibly 'undefined'.",
             "src/client/history.ts(72,68): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.",
-            "src/client/index.ts(1791,13): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'.",
-            "src/client/index.ts(920,17): error TS18047: 'last.nodeValue' is possibly 'null'.",
-            "src/client/index.ts(99,59): error TS6142: Module './settings-card.js' was resolved to 'src/client/settings-card.tsx', but '--jsx' is not set."
+            "src/client/index.ts(103,59): error TS6142: Module './settings-card.js' was resolved to 'src/client/settings-card.tsx', but '--jsx' is not set.",
+            "src/client/index.ts(1057,17): error TS18047: 'last.nodeValue' is possibly 'null'.",
+            "src/client/index.ts(168,51): error TS6142: Module './key-hint-bar.js' was resolved to 'src/client/key-hint-bar.tsx', but '--jsx' is not set.",
+            "src/client/index.ts(169,57): error TS6142: Module './failure-note.js' was resolved to 'src/client/failure-note.tsx', but '--jsx' is not set.",
+            "src/client/index.ts(2171,17): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'.",
+            "src/client/index.ts(2250,13): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'."
           ],
           "novelVsBaseline": [],
-          "baselineErrors": 8,
-          "raw": "src/client/accept-guard.ts(51,36): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\nsrc/client/chunk.ts(68,39): error TS2532: Object is possibly 'undefined'.\nsrc/client/chunk.ts(71,33): error TS2532: Object is possibly 'undefined'.\nsrc/client/history.ts(72,68): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\nsrc/client/index.ts(99,59): error TS6142: Module './settings-card.js' was resolved to '/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.1.5-rc.3/src/client/settings-card.tsx', but '--jsx' is not set.\nsrc/client/index.ts(920,17): error TS18047: 'last.nodeValue' is possibly 'null'.\nsrc/client/index.ts(1791,13): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'."
+          "baselineErrors": 11,
+          "raw": "src/client/accept-guard.ts(51,36): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\nsrc/client/chunk.ts(68,39): error TS2532: Object is possibly 'undefined'.\nsrc/client/chunk.ts(71,33): error TS2532: Object is possibly 'undefined'.\nsrc/client/history.ts(72,68): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\nsrc/client/index.ts(103,59): error TS6142: Module './settings-card.js' was resolved to '/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.1.5-rc.3/src/client/settings-card.tsx', but '--jsx' is not set.\nsrc/client/index.ts(168,51): error TS6142: Module './key-hint-bar.js' was resolved to '/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.1.5-rc.3/src/client/key-hint-bar.tsx', but '--jsx' is not set.\nsrc/client/index.ts(169,57): error TS6142: Module './failure-note.js' was resolved to '/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.1.5-rc.3/src/client/failure-note.tsx', but '--jsx' is not set.\nsrc/client/index.ts(1057,17): error TS18047: 'last.nodeValue' is possibly 'null'.\nsrc/client/index.ts(2171,17): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'.\nsrc/client/index.ts(2250,13): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'."
         }
       },
       "faceB": {
@@ -361,7 +424,7 @@
             "registry": {
               "checkedVersion": "0.1.5-rc.3",
               "published": true,
-              "versionCount": 43
+              "versionCount": 47
             },
             "declaredAsPeerDependency": false,
             "declaredAsDevDependency": true,
@@ -428,7 +491,8 @@
       },
       "faceA": {
         "overlayDir": "/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.1.7-rc.1",
-        "method": "isolated temp copy; peers materialized as REAL dirs via cp -rL (never outside-pointing symlinks — that produces a false red, see header §2)",
+        "method": "isolated temp copy; peers materialized as REAL dirs via cp -rL (never outside-pointing symlinks — that produces a false red, see header §2); nested node_modules stripped so each peer resolves the overlay-top copy (single type identity — see header §3)",
+        "dedupedNestedModules": [],
         "mountedPeers": {
           "dsh-llm": "0.1.7-rc.1",
           "dsh-session": "0.1.7-rc.1",
@@ -472,19 +536,22 @@
         "client": {
           "config": "tsconfig.client.json",
           "scope": "src/client only (exclude: [] override)",
-          "errors": 7,
+          "errors": 10,
           "errorList": [
             "src/client/accept-guard.ts(51,36): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.",
             "src/client/chunk.ts(68,39): error TS2532: Object is possibly 'undefined'.",
             "src/client/chunk.ts(71,33): error TS2532: Object is possibly 'undefined'.",
             "src/client/history.ts(72,68): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.",
-            "src/client/index.ts(1791,13): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'.",
-            "src/client/index.ts(920,17): error TS18047: 'last.nodeValue' is possibly 'null'.",
-            "src/client/index.ts(99,59): error TS6142: Module './settings-card.js' was resolved to 'src/client/settings-card.tsx', but '--jsx' is not set."
+            "src/client/index.ts(103,59): error TS6142: Module './settings-card.js' was resolved to 'src/client/settings-card.tsx', but '--jsx' is not set.",
+            "src/client/index.ts(1057,17): error TS18047: 'last.nodeValue' is possibly 'null'.",
+            "src/client/index.ts(168,51): error TS6142: Module './key-hint-bar.js' was resolved to 'src/client/key-hint-bar.tsx', but '--jsx' is not set.",
+            "src/client/index.ts(169,57): error TS6142: Module './failure-note.js' was resolved to 'src/client/failure-note.tsx', but '--jsx' is not set.",
+            "src/client/index.ts(2171,17): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'.",
+            "src/client/index.ts(2250,13): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'."
           ],
           "novelVsBaseline": [],
-          "baselineErrors": 8,
-          "raw": "src/client/accept-guard.ts(51,36): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\nsrc/client/chunk.ts(68,39): error TS2532: Object is possibly 'undefined'.\nsrc/client/chunk.ts(71,33): error TS2532: Object is possibly 'undefined'.\nsrc/client/history.ts(72,68): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\nsrc/client/index.ts(99,59): error TS6142: Module './settings-card.js' was resolved to '/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.1.7-rc.1/src/client/settings-card.tsx', but '--jsx' is not set.\nsrc/client/index.ts(920,17): error TS18047: 'last.nodeValue' is possibly 'null'.\nsrc/client/index.ts(1791,13): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'."
+          "baselineErrors": 11,
+          "raw": "src/client/accept-guard.ts(51,36): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\nsrc/client/chunk.ts(68,39): error TS2532: Object is possibly 'undefined'.\nsrc/client/chunk.ts(71,33): error TS2532: Object is possibly 'undefined'.\nsrc/client/history.ts(72,68): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\nsrc/client/index.ts(103,59): error TS6142: Module './settings-card.js' was resolved to '/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.1.7-rc.1/src/client/settings-card.tsx', but '--jsx' is not set.\nsrc/client/index.ts(168,51): error TS6142: Module './key-hint-bar.js' was resolved to '/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.1.7-rc.1/src/client/key-hint-bar.tsx', but '--jsx' is not set.\nsrc/client/index.ts(169,57): error TS6142: Module './failure-note.js' was resolved to '/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.1.7-rc.1/src/client/failure-note.tsx', but '--jsx' is not set.\nsrc/client/index.ts(1057,17): error TS18047: 'last.nodeValue' is possibly 'null'.\nsrc/client/index.ts(2171,17): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'.\nsrc/client/index.ts(2250,13): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'."
         }
       },
       "faceB": {
@@ -535,7 +602,7 @@
             "registry": {
               "checkedVersion": "0.1.7-rc.1",
               "published": true,
-              "versionCount": 43
+              "versionCount": 47
             },
             "declaredAsPeerDependency": false,
             "declaredAsDevDependency": true,
@@ -602,7 +669,8 @@
       },
       "faceA": {
         "overlayDir": "/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.1.7-rc.2",
-        "method": "isolated temp copy; peers materialized as REAL dirs via cp -rL (never outside-pointing symlinks — that produces a false red, see header §2)",
+        "method": "isolated temp copy; peers materialized as REAL dirs via cp -rL (never outside-pointing symlinks — that produces a false red, see header §2); nested node_modules stripped so each peer resolves the overlay-top copy (single type identity — see header §3)",
+        "dedupedNestedModules": [],
         "mountedPeers": {
           "dsh-llm": "0.1.7-rc.2",
           "dsh-session": "0.1.7-rc.2",
@@ -646,19 +714,22 @@
         "client": {
           "config": "tsconfig.client.json",
           "scope": "src/client only (exclude: [] override)",
-          "errors": 7,
+          "errors": 10,
           "errorList": [
             "src/client/accept-guard.ts(51,36): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.",
             "src/client/chunk.ts(68,39): error TS2532: Object is possibly 'undefined'.",
             "src/client/chunk.ts(71,33): error TS2532: Object is possibly 'undefined'.",
             "src/client/history.ts(72,68): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.",
-            "src/client/index.ts(1791,13): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'.",
-            "src/client/index.ts(920,17): error TS18047: 'last.nodeValue' is possibly 'null'.",
-            "src/client/index.ts(99,59): error TS6142: Module './settings-card.js' was resolved to 'src/client/settings-card.tsx', but '--jsx' is not set."
+            "src/client/index.ts(103,59): error TS6142: Module './settings-card.js' was resolved to 'src/client/settings-card.tsx', but '--jsx' is not set.",
+            "src/client/index.ts(1057,17): error TS18047: 'last.nodeValue' is possibly 'null'.",
+            "src/client/index.ts(168,51): error TS6142: Module './key-hint-bar.js' was resolved to 'src/client/key-hint-bar.tsx', but '--jsx' is not set.",
+            "src/client/index.ts(169,57): error TS6142: Module './failure-note.js' was resolved to 'src/client/failure-note.tsx', but '--jsx' is not set.",
+            "src/client/index.ts(2171,17): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'.",
+            "src/client/index.ts(2250,13): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'."
           ],
           "novelVsBaseline": [],
-          "baselineErrors": 8,
-          "raw": "src/client/accept-guard.ts(51,36): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\nsrc/client/chunk.ts(68,39): error TS2532: Object is possibly 'undefined'.\nsrc/client/chunk.ts(71,33): error TS2532: Object is possibly 'undefined'.\nsrc/client/history.ts(72,68): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\nsrc/client/index.ts(99,59): error TS6142: Module './settings-card.js' was resolved to '/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.1.7-rc.2/src/client/settings-card.tsx', but '--jsx' is not set.\nsrc/client/index.ts(920,17): error TS18047: 'last.nodeValue' is possibly 'null'.\nsrc/client/index.ts(1791,13): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'."
+          "baselineErrors": 11,
+          "raw": "src/client/accept-guard.ts(51,36): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\nsrc/client/chunk.ts(68,39): error TS2532: Object is possibly 'undefined'.\nsrc/client/chunk.ts(71,33): error TS2532: Object is possibly 'undefined'.\nsrc/client/history.ts(72,68): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\nsrc/client/index.ts(103,59): error TS6142: Module './settings-card.js' was resolved to '/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.1.7-rc.2/src/client/settings-card.tsx', but '--jsx' is not set.\nsrc/client/index.ts(168,51): error TS6142: Module './key-hint-bar.js' was resolved to '/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.1.7-rc.2/src/client/key-hint-bar.tsx', but '--jsx' is not set.\nsrc/client/index.ts(169,57): error TS6142: Module './failure-note.js' was resolved to '/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.1.7-rc.2/src/client/failure-note.tsx', but '--jsx' is not set.\nsrc/client/index.ts(1057,17): error TS18047: 'last.nodeValue' is possibly 'null'.\nsrc/client/index.ts(2171,17): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'.\nsrc/client/index.ts(2250,13): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'."
         }
       },
       "faceB": {
@@ -709,7 +780,7 @@
             "registry": {
               "checkedVersion": "0.1.7-rc.2",
               "published": true,
-              "versionCount": 43
+              "versionCount": 47
             },
             "declaredAsPeerDependency": false,
             "declaredAsDevDependency": true,
@@ -776,7 +847,8 @@
       },
       "faceA": {
         "overlayDir": "/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.2.0-rc.2",
-        "method": "isolated temp copy; peers materialized as REAL dirs via cp -rL (never outside-pointing symlinks — that produces a false red, see header §2)",
+        "method": "isolated temp copy; peers materialized as REAL dirs via cp -rL (never outside-pointing symlinks — that produces a false red, see header §2); nested node_modules stripped so each peer resolves the overlay-top copy (single type identity — see header §3)",
+        "dedupedNestedModules": [],
         "mountedPeers": {
           "dsh-llm": "0.2.0-rc.2",
           "dsh-session": "0.2.0-rc.2",
@@ -820,19 +892,22 @@
         "client": {
           "config": "tsconfig.client.json",
           "scope": "src/client only (exclude: [] override)",
-          "errors": 7,
+          "errors": 10,
           "errorList": [
             "src/client/accept-guard.ts(51,36): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.",
             "src/client/chunk.ts(68,39): error TS2532: Object is possibly 'undefined'.",
             "src/client/chunk.ts(71,33): error TS2532: Object is possibly 'undefined'.",
             "src/client/history.ts(72,68): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.",
-            "src/client/index.ts(1791,13): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'.",
-            "src/client/index.ts(920,17): error TS18047: 'last.nodeValue' is possibly 'null'.",
-            "src/client/index.ts(99,59): error TS6142: Module './settings-card.js' was resolved to 'src/client/settings-card.tsx', but '--jsx' is not set."
+            "src/client/index.ts(103,59): error TS6142: Module './settings-card.js' was resolved to 'src/client/settings-card.tsx', but '--jsx' is not set.",
+            "src/client/index.ts(1057,17): error TS18047: 'last.nodeValue' is possibly 'null'.",
+            "src/client/index.ts(168,51): error TS6142: Module './key-hint-bar.js' was resolved to 'src/client/key-hint-bar.tsx', but '--jsx' is not set.",
+            "src/client/index.ts(169,57): error TS6142: Module './failure-note.js' was resolved to 'src/client/failure-note.tsx', but '--jsx' is not set.",
+            "src/client/index.ts(2171,17): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'.",
+            "src/client/index.ts(2250,13): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'."
           ],
           "novelVsBaseline": [],
-          "baselineErrors": 8,
-          "raw": "src/client/accept-guard.ts(51,36): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\nsrc/client/chunk.ts(68,39): error TS2532: Object is possibly 'undefined'.\nsrc/client/chunk.ts(71,33): error TS2532: Object is possibly 'undefined'.\nsrc/client/history.ts(72,68): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\nsrc/client/index.ts(99,59): error TS6142: Module './settings-card.js' was resolved to '/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.2.0-rc.2/src/client/settings-card.tsx', but '--jsx' is not set.\nsrc/client/index.ts(920,17): error TS18047: 'last.nodeValue' is possibly 'null'.\nsrc/client/index.ts(1791,13): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'."
+          "baselineErrors": 11,
+          "raw": "src/client/accept-guard.ts(51,36): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\nsrc/client/chunk.ts(68,39): error TS2532: Object is possibly 'undefined'.\nsrc/client/chunk.ts(71,33): error TS2532: Object is possibly 'undefined'.\nsrc/client/history.ts(72,68): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\nsrc/client/index.ts(103,59): error TS6142: Module './settings-card.js' was resolved to '/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.2.0-rc.2/src/client/settings-card.tsx', but '--jsx' is not set.\nsrc/client/index.ts(168,51): error TS6142: Module './key-hint-bar.js' was resolved to '/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.2.0-rc.2/src/client/key-hint-bar.tsx', but '--jsx' is not set.\nsrc/client/index.ts(169,57): error TS6142: Module './failure-note.js' was resolved to '/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.2.0-rc.2/src/client/failure-note.tsx', but '--jsx' is not set.\nsrc/client/index.ts(1057,17): error TS18047: 'last.nodeValue' is possibly 'null'.\nsrc/client/index.ts(2171,17): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'.\nsrc/client/index.ts(2250,13): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'."
         }
       },
       "faceB": {
@@ -883,7 +958,7 @@
             "registry": {
               "checkedVersion": "0.2.0-rc.2",
               "published": true,
-              "versionCount": 43
+              "versionCount": 47
             },
             "declaredAsPeerDependency": false,
             "declaredAsDevDependency": true,
@@ -950,7 +1025,24 @@
       },
       "faceA": {
         "overlayDir": "/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.2.1-rc.2",
-        "method": "isolated temp copy; peers materialized as REAL dirs via cp -rL (never outside-pointing symlinks — that produces a false red, see header §2)",
+        "method": "isolated temp copy; peers materialized as REAL dirs via cp -rL (never outside-pointing symlinks — that produces a false red, see header §2); nested node_modules stripped so each peer resolves the overlay-top copy (single type identity — see header §3)",
+        "dedupedNestedModules": [
+          {
+            "peer": "dsh-llm",
+            "dep": "zod",
+            "version": "4.4.3"
+          },
+          {
+            "peer": "dsh-session-projection",
+            "dep": "zod",
+            "version": "4.4.3"
+          },
+          {
+            "peer": "dsh-storage-domain",
+            "dep": "zod",
+            "version": "4.4.3"
+          }
+        ],
         "mountedPeers": {
           "dsh-llm": "0.2.1-rc.2",
           "dsh-session": "0.2.1-rc.2",
@@ -993,19 +1085,22 @@
         "client": {
           "config": "tsconfig.client.json",
           "scope": "src/client only (exclude: [] override)",
-          "errors": 7,
+          "errors": 10,
           "errorList": [
             "src/client/accept-guard.ts(51,36): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.",
             "src/client/chunk.ts(68,39): error TS2532: Object is possibly 'undefined'.",
             "src/client/chunk.ts(71,33): error TS2532: Object is possibly 'undefined'.",
             "src/client/history.ts(72,68): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.",
-            "src/client/index.ts(1791,13): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'.",
-            "src/client/index.ts(920,17): error TS18047: 'last.nodeValue' is possibly 'null'.",
-            "src/client/index.ts(99,59): error TS6142: Module './settings-card.js' was resolved to 'src/client/settings-card.tsx', but '--jsx' is not set."
+            "src/client/index.ts(103,59): error TS6142: Module './settings-card.js' was resolved to 'src/client/settings-card.tsx', but '--jsx' is not set.",
+            "src/client/index.ts(1057,17): error TS18047: 'last.nodeValue' is possibly 'null'.",
+            "src/client/index.ts(168,51): error TS6142: Module './key-hint-bar.js' was resolved to 'src/client/key-hint-bar.tsx', but '--jsx' is not set.",
+            "src/client/index.ts(169,57): error TS6142: Module './failure-note.js' was resolved to 'src/client/failure-note.tsx', but '--jsx' is not set.",
+            "src/client/index.ts(2171,17): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'.",
+            "src/client/index.ts(2250,13): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'."
           ],
           "novelVsBaseline": [],
-          "baselineErrors": 8,
-          "raw": "src/client/accept-guard.ts(51,36): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\nsrc/client/chunk.ts(68,39): error TS2532: Object is possibly 'undefined'.\nsrc/client/chunk.ts(71,33): error TS2532: Object is possibly 'undefined'.\nsrc/client/history.ts(72,68): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\nsrc/client/index.ts(99,59): error TS6142: Module './settings-card.js' was resolved to '/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.2.1-rc.2/src/client/settings-card.tsx', but '--jsx' is not set.\nsrc/client/index.ts(920,17): error TS18047: 'last.nodeValue' is possibly 'null'.\nsrc/client/index.ts(1791,13): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'."
+          "baselineErrors": 11,
+          "raw": "src/client/accept-guard.ts(51,36): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\nsrc/client/chunk.ts(68,39): error TS2532: Object is possibly 'undefined'.\nsrc/client/chunk.ts(71,33): error TS2532: Object is possibly 'undefined'.\nsrc/client/history.ts(72,68): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\nsrc/client/index.ts(103,59): error TS6142: Module './settings-card.js' was resolved to '/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.2.1-rc.2/src/client/settings-card.tsx', but '--jsx' is not set.\nsrc/client/index.ts(168,51): error TS6142: Module './key-hint-bar.js' was resolved to '/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.2.1-rc.2/src/client/key-hint-bar.tsx', but '--jsx' is not set.\nsrc/client/index.ts(169,57): error TS6142: Module './failure-note.js' was resolved to '/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.2.1-rc.2/src/client/failure-note.tsx', but '--jsx' is not set.\nsrc/client/index.ts(1057,17): error TS18047: 'last.nodeValue' is possibly 'null'.\nsrc/client/index.ts(2171,17): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'.\nsrc/client/index.ts(2250,13): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'."
         }
       },
       "faceB": {
@@ -1059,7 +1154,7 @@
             "registry": {
               "checkedVersion": "0.2.1-rc.2",
               "published": true,
-              "versionCount": 43
+              "versionCount": 47
             },
             "declaredAsPeerDependency": false,
             "declaredAsDevDependency": true,
@@ -1126,7 +1221,24 @@
       },
       "faceA": {
         "overlayDir": "/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.2.2-alpha.2",
-        "method": "isolated temp copy; peers materialized as REAL dirs via cp -rL (never outside-pointing symlinks — that produces a false red, see header §2)",
+        "method": "isolated temp copy; peers materialized as REAL dirs via cp -rL (never outside-pointing symlinks — that produces a false red, see header §2); nested node_modules stripped so each peer resolves the overlay-top copy (single type identity — see header §3)",
+        "dedupedNestedModules": [
+          {
+            "peer": "dsh-llm",
+            "dep": "zod",
+            "version": "4.4.3"
+          },
+          {
+            "peer": "dsh-session-projection",
+            "dep": "zod",
+            "version": "4.4.3"
+          },
+          {
+            "peer": "dsh-storage-domain",
+            "dep": "zod",
+            "version": "4.4.3"
+          }
+        ],
         "mountedPeers": {
           "dsh-llm": "0.2.2-alpha.2",
           "dsh-session": "0.2.2-alpha.2",
@@ -1169,19 +1281,22 @@
         "client": {
           "config": "tsconfig.client.json",
           "scope": "src/client only (exclude: [] override)",
-          "errors": 7,
+          "errors": 10,
           "errorList": [
             "src/client/accept-guard.ts(51,36): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.",
             "src/client/chunk.ts(68,39): error TS2532: Object is possibly 'undefined'.",
             "src/client/chunk.ts(71,33): error TS2532: Object is possibly 'undefined'.",
             "src/client/history.ts(72,68): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.",
-            "src/client/index.ts(1791,13): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'.",
-            "src/client/index.ts(920,17): error TS18047: 'last.nodeValue' is possibly 'null'.",
-            "src/client/index.ts(99,59): error TS6142: Module './settings-card.js' was resolved to 'src/client/settings-card.tsx', but '--jsx' is not set."
+            "src/client/index.ts(103,59): error TS6142: Module './settings-card.js' was resolved to 'src/client/settings-card.tsx', but '--jsx' is not set.",
+            "src/client/index.ts(1057,17): error TS18047: 'last.nodeValue' is possibly 'null'.",
+            "src/client/index.ts(168,51): error TS6142: Module './key-hint-bar.js' was resolved to 'src/client/key-hint-bar.tsx', but '--jsx' is not set.",
+            "src/client/index.ts(169,57): error TS6142: Module './failure-note.js' was resolved to 'src/client/failure-note.tsx', but '--jsx' is not set.",
+            "src/client/index.ts(2171,17): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'.",
+            "src/client/index.ts(2250,13): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'."
           ],
           "novelVsBaseline": [],
-          "baselineErrors": 8,
-          "raw": "src/client/accept-guard.ts(51,36): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\nsrc/client/chunk.ts(68,39): error TS2532: Object is possibly 'undefined'.\nsrc/client/chunk.ts(71,33): error TS2532: Object is possibly 'undefined'.\nsrc/client/history.ts(72,68): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\nsrc/client/index.ts(99,59): error TS6142: Module './settings-card.js' was resolved to '/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.2.2-alpha.2/src/client/settings-card.tsx', but '--jsx' is not set.\nsrc/client/index.ts(920,17): error TS18047: 'last.nodeValue' is possibly 'null'.\nsrc/client/index.ts(1791,13): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'."
+          "baselineErrors": 11,
+          "raw": "src/client/accept-guard.ts(51,36): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\nsrc/client/chunk.ts(68,39): error TS2532: Object is possibly 'undefined'.\nsrc/client/chunk.ts(71,33): error TS2532: Object is possibly 'undefined'.\nsrc/client/history.ts(72,68): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\nsrc/client/index.ts(103,59): error TS6142: Module './settings-card.js' was resolved to '/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.2.2-alpha.2/src/client/settings-card.tsx', but '--jsx' is not set.\nsrc/client/index.ts(168,51): error TS6142: Module './key-hint-bar.js' was resolved to '/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.2.2-alpha.2/src/client/key-hint-bar.tsx', but '--jsx' is not set.\nsrc/client/index.ts(169,57): error TS6142: Module './failure-note.js' was resolved to '/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.2.2-alpha.2/src/client/failure-note.tsx', but '--jsx' is not set.\nsrc/client/index.ts(1057,17): error TS18047: 'last.nodeValue' is possibly 'null'.\nsrc/client/index.ts(2171,17): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'.\nsrc/client/index.ts(2250,13): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'."
         }
       },
       "faceB": {
@@ -1235,7 +1350,399 @@
             "registry": {
               "checkedVersion": "0.2.2-alpha.2",
               "published": true,
-              "versionCount": 43
+              "versionCount": 47
+            },
+            "declaredAsPeerDependency": false,
+            "declaredAsDevDependency": true,
+            "declaredInClientInject": false
+          },
+          {
+            "specifier": "react",
+            "resolvesAgainstTree": false,
+            "resolvesViaHostSeed": true,
+            "publishedAtGenerationVersion": null,
+            "registry": {
+              "note": "platform-provided by the host runtime; not part of any DSH generation release line"
+            },
+            "declaredAsPeerDependency": false,
+            "declaredAsDevDependency": true,
+            "declaredInClientInject": false
+          },
+          {
+            "specifier": "react/jsx-runtime",
+            "resolvesAgainstTree": false,
+            "resolvesViaHostSeed": true,
+            "publishedAtGenerationVersion": null,
+            "registry": {
+              "note": "platform-provided by the host runtime; not part of any DSH generation release line"
+            },
+            "declaredAsPeerDependency": false,
+            "declaredAsDevDependency": false,
+            "declaredInClientInject": false
+          }
+        ],
+        "runtimeResolutionOracle": "host __ModuleLoader__ makeRequire: seed table -> module table -> registered factories. The seed table is FIRST, so tree node_modules absence does NOT imply runtime failure."
+      },
+      "verdict": "GREEN",
+      "reasons": [],
+      "declarationHygiene": {
+        "undeclaredRuntimeImports": [
+          "@deepseek-ai/dsh-client-ui-primitives"
+        ],
+        "declaredInClientInject": [
+          "@deepseek-ai/dsh-client-ui-settings",
+          "@deepseek-ai/dsh-client-ui-conversation"
+        ],
+        "note": "an import that only resolves because the host bundle seeds it is \"resolves by host grace, undeclared\" — it is neither a functional red nor a clean green, and no peer-based admission check can ever see it."
+      },
+      "treeMutatedDuringRun": false
+    },
+    {
+      "id": "0.2.2-rc.1",
+      "bootModel": "app-boot",
+      "tree": {
+        "generationId": "0.2.2-rc.1",
+        "treeRoot": "/home/wujue/dsh-versions/0.2.2-rc.1",
+        "exists": true,
+        "mtime": "2026-11-06T02:07:07.449Z",
+        "entries": 331,
+        "launcherVersion": "0.2.2-rc.1"
+      },
+      "mixedTree": {
+        "checked": 320,
+        "mismatched": 0,
+        "versions": {
+          "0.2.2-rc.1": 320
+        }
+      },
+      "faceA": {
+        "overlayDir": "/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.2.2-rc.1",
+        "method": "isolated temp copy; peers materialized as REAL dirs via cp -rL (never outside-pointing symlinks — that produces a false red, see header §2); nested node_modules stripped so each peer resolves the overlay-top copy (single type identity — see header §3)",
+        "dedupedNestedModules": [
+          {
+            "peer": "dsh-llm",
+            "dep": "zod",
+            "version": "4.4.3"
+          },
+          {
+            "peer": "dsh-session-projection",
+            "dep": "zod",
+            "version": "4.4.3"
+          },
+          {
+            "peer": "dsh-storage-domain",
+            "dep": "zod",
+            "version": "4.4.3"
+          }
+        ],
+        "mountedPeers": {
+          "dsh-llm": "0.2.2-rc.1",
+          "dsh-session": "0.2.2-rc.1",
+          "dsh-session-projection": "0.2.2-rc.1",
+          "dsh-settings": "0.2.2-rc.1",
+          "dsh-storage-domain": "0.2.2-rc.1",
+          "dsh-timeout": "0.2.2-rc.1",
+          "dsh-storage": "0.2.2-rc.1",
+          "dsh-storage-json": "0.2.2-rc.1",
+          "dsh-client-ui-settings": "0.2.2-rc.1",
+          "dsh-client-ui-conversation": "0.2.2-rc.1"
+        },
+        "missingPeers": [
+          "dsh-client-ui-primitives",
+          "dsh-client-store"
+        ],
+        "overlayVersions": {
+          "cordis": "4.0.1",
+          "cosmokit": "1.8.5",
+          "dsh-client-ui-conversation": "0.2.2-rc.1",
+          "dsh-client-ui-settings": "0.2.2-rc.1",
+          "dsh-llm": "0.2.2-rc.1",
+          "dsh-session": "0.2.2-rc.1",
+          "dsh-session-projection": "0.2.2-rc.1",
+          "dsh-settings": "0.2.2-rc.1",
+          "dsh-storage": "0.2.2-rc.1",
+          "dsh-storage-domain": "0.2.2-rc.1",
+          "dsh-storage-json": "0.2.2-rc.1",
+          "dsh-timeout": "0.2.2-rc.1",
+          "schemastery": "3.18.4"
+        },
+        "host": {
+          "config": "tsconfig.json",
+          "scope": "host only (excludes src/client)",
+          "errors": 0,
+          "errorList": [],
+          "novelVsBaseline": [],
+          "raw": ""
+        },
+        "client": {
+          "config": "tsconfig.client.json",
+          "scope": "src/client only (exclude: [] override)",
+          "errors": 10,
+          "errorList": [
+            "src/client/accept-guard.ts(51,36): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.",
+            "src/client/chunk.ts(68,39): error TS2532: Object is possibly 'undefined'.",
+            "src/client/chunk.ts(71,33): error TS2532: Object is possibly 'undefined'.",
+            "src/client/history.ts(72,68): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.",
+            "src/client/index.ts(103,59): error TS6142: Module './settings-card.js' was resolved to 'src/client/settings-card.tsx', but '--jsx' is not set.",
+            "src/client/index.ts(1057,17): error TS18047: 'last.nodeValue' is possibly 'null'.",
+            "src/client/index.ts(168,51): error TS6142: Module './key-hint-bar.js' was resolved to 'src/client/key-hint-bar.tsx', but '--jsx' is not set.",
+            "src/client/index.ts(169,57): error TS6142: Module './failure-note.js' was resolved to 'src/client/failure-note.tsx', but '--jsx' is not set.",
+            "src/client/index.ts(2171,17): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'.",
+            "src/client/index.ts(2250,13): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'."
+          ],
+          "novelVsBaseline": [],
+          "baselineErrors": 11,
+          "raw": "src/client/accept-guard.ts(51,36): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\nsrc/client/chunk.ts(68,39): error TS2532: Object is possibly 'undefined'.\nsrc/client/chunk.ts(71,33): error TS2532: Object is possibly 'undefined'.\nsrc/client/history.ts(72,68): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\nsrc/client/index.ts(103,59): error TS6142: Module './settings-card.js' was resolved to '/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.2.2-rc.1/src/client/settings-card.tsx', but '--jsx' is not set.\nsrc/client/index.ts(168,51): error TS6142: Module './key-hint-bar.js' was resolved to '/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.2.2-rc.1/src/client/key-hint-bar.tsx', but '--jsx' is not set.\nsrc/client/index.ts(169,57): error TS6142: Module './failure-note.js' was resolved to '/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.2.2-rc.1/src/client/failure-note.tsx', but '--jsx' is not set.\nsrc/client/index.ts(1057,17): error TS18047: 'last.nodeValue' is possibly 'null'.\nsrc/client/index.ts(2171,17): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'.\nsrc/client/index.ts(2250,13): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'."
+        }
+      },
+      "faceB": {
+        "entry": "/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/lib/client.js",
+        "bareSpecifiers": [
+          "@deepseek-ai/dsh-client-ui-primitives",
+          "react",
+          "react/jsx-runtime"
+        ],
+        "anchor": "/home/wujue/dsh-versions/0.2.2-rc.1/node_modules/@deepseek-ai/dsh-client-ui-settings/lib/index.js",
+        "resolutionMethod": "createRequire(anchor inside the generation tree).resolve() — real ESM/CJS resolution, not a text scan. NOTE: import.meta.resolve(spec, parentURL) ignores parentURL and cannot be used for rooted resolution.",
+        "treeUnresolved": [
+          "@deepseek-ai/dsh-client-ui-primitives",
+          "react",
+          "react/jsx-runtime"
+        ],
+        "hostSeed": {
+          "available": true,
+          "seedFn": "YZ",
+          "source": "index-BgUyXZcc.js",
+          "keyCount": 11,
+          "keys": [
+            "react",
+            "react/jsx-runtime",
+            "react-dom",
+            "react-dom/client",
+            "@deepseek-ai/cordis",
+            "zod",
+            "@tanstack/react-virtual",
+            "@deepseek-ai/dsh-client-store",
+            "@deepseek-ai/dsh-client-ui-slots",
+            "@deepseek-ai/dsh-client-ui-primitives",
+            "@deepseek-ai/dsh-client-ui-dockkit"
+          ],
+          "has": {
+            "@deepseek-ai/dsh-client-ui-primitives": true,
+            "react": true,
+            "react/jsx-runtime": true
+          }
+        },
+        "declaredInjectPresence": {
+          "@deepseek-ai/dsh-client-ui-settings": "0.2.2-rc.1",
+          "@deepseek-ai/dsh-client-ui-conversation": "0.2.2-rc.1"
+        },
+        "perSpecifier": [
+          {
+            "specifier": "@deepseek-ai/dsh-client-ui-primitives",
+            "resolvesAgainstTree": false,
+            "resolvesViaHostSeed": true,
+            "publishedAtGenerationVersion": true,
+            "registry": {
+              "checkedVersion": "0.2.2-rc.1",
+              "published": true,
+              "versionCount": 47
+            },
+            "declaredAsPeerDependency": false,
+            "declaredAsDevDependency": true,
+            "declaredInClientInject": false
+          },
+          {
+            "specifier": "react",
+            "resolvesAgainstTree": false,
+            "resolvesViaHostSeed": true,
+            "publishedAtGenerationVersion": null,
+            "registry": {
+              "note": "platform-provided by the host runtime; not part of any DSH generation release line"
+            },
+            "declaredAsPeerDependency": false,
+            "declaredAsDevDependency": true,
+            "declaredInClientInject": false
+          },
+          {
+            "specifier": "react/jsx-runtime",
+            "resolvesAgainstTree": false,
+            "resolvesViaHostSeed": true,
+            "publishedAtGenerationVersion": null,
+            "registry": {
+              "note": "platform-provided by the host runtime; not part of any DSH generation release line"
+            },
+            "declaredAsPeerDependency": false,
+            "declaredAsDevDependency": false,
+            "declaredInClientInject": false
+          }
+        ],
+        "runtimeResolutionOracle": "host __ModuleLoader__ makeRequire: seed table -> module table -> registered factories. The seed table is FIRST, so tree node_modules absence does NOT imply runtime failure."
+      },
+      "verdict": "GREEN",
+      "reasons": [],
+      "declarationHygiene": {
+        "undeclaredRuntimeImports": [
+          "@deepseek-ai/dsh-client-ui-primitives"
+        ],
+        "declaredInClientInject": [
+          "@deepseek-ai/dsh-client-ui-settings",
+          "@deepseek-ai/dsh-client-ui-conversation"
+        ],
+        "note": "an import that only resolves because the host bundle seeds it is \"resolves by host grace, undeclared\" — it is neither a functional red nor a clean green, and no peer-based admission check can ever see it."
+      },
+      "treeMutatedDuringRun": false
+    },
+    {
+      "id": "0.2.2-rc.5",
+      "bootModel": "app-boot",
+      "tree": {
+        "generationId": "0.2.2-rc.5",
+        "treeRoot": "/home/wujue/dsh-versions/0.2.2-rc.5",
+        "exists": true,
+        "mtime": "2026-11-20T04:55:52.813Z",
+        "entries": 338,
+        "launcherVersion": "0.2.2-rc.5"
+      },
+      "mixedTree": {
+        "checked": 327,
+        "mismatched": 0,
+        "versions": {
+          "0.2.2-rc.5": 327
+        }
+      },
+      "faceA": {
+        "overlayDir": "/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.2.2-rc.5",
+        "method": "isolated temp copy; peers materialized as REAL dirs via cp -rL (never outside-pointing symlinks — that produces a false red, see header §2); nested node_modules stripped so each peer resolves the overlay-top copy (single type identity — see header §3)",
+        "dedupedNestedModules": [
+          {
+            "peer": "dsh-llm",
+            "dep": "zod",
+            "version": "4.6.6"
+          },
+          {
+            "peer": "dsh-session-projection",
+            "dep": "zod",
+            "version": "4.6.6"
+          },
+          {
+            "peer": "dsh-storage-domain",
+            "dep": "zod",
+            "version": "4.6.6"
+          }
+        ],
+        "mountedPeers": {
+          "dsh-llm": "0.2.2-rc.5",
+          "dsh-session": "0.2.2-rc.5",
+          "dsh-session-projection": "0.2.2-rc.5",
+          "dsh-settings": "0.2.2-rc.5",
+          "dsh-storage-domain": "0.2.2-rc.5",
+          "dsh-timeout": "0.2.2-rc.5",
+          "dsh-storage": "0.2.2-rc.5",
+          "dsh-storage-json": "0.2.2-rc.5",
+          "dsh-client-ui-settings": "0.2.2-rc.5",
+          "dsh-client-ui-conversation": "0.2.2-rc.5"
+        },
+        "missingPeers": [
+          "dsh-client-ui-primitives",
+          "dsh-client-store"
+        ],
+        "overlayVersions": {
+          "cordis": "4.0.1",
+          "cosmokit": "1.8.5",
+          "dsh-client-ui-conversation": "0.2.2-rc.5",
+          "dsh-client-ui-settings": "0.2.2-rc.5",
+          "dsh-llm": "0.2.2-rc.5",
+          "dsh-session": "0.2.2-rc.5",
+          "dsh-session-projection": "0.2.2-rc.5",
+          "dsh-settings": "0.2.2-rc.5",
+          "dsh-storage": "0.2.2-rc.5",
+          "dsh-storage-domain": "0.2.2-rc.5",
+          "dsh-storage-json": "0.2.2-rc.5",
+          "dsh-timeout": "0.2.2-rc.5",
+          "schemastery": "3.18.4"
+        },
+        "host": {
+          "config": "tsconfig.json",
+          "scope": "host only (excludes src/client)",
+          "errors": 0,
+          "errorList": [],
+          "novelVsBaseline": [],
+          "raw": ""
+        },
+        "client": {
+          "config": "tsconfig.client.json",
+          "scope": "src/client only (exclude: [] override)",
+          "errors": 10,
+          "errorList": [
+            "src/client/accept-guard.ts(51,36): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.",
+            "src/client/chunk.ts(68,39): error TS2532: Object is possibly 'undefined'.",
+            "src/client/chunk.ts(71,33): error TS2532: Object is possibly 'undefined'.",
+            "src/client/history.ts(72,68): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.",
+            "src/client/index.ts(103,59): error TS6142: Module './settings-card.js' was resolved to 'src/client/settings-card.tsx', but '--jsx' is not set.",
+            "src/client/index.ts(1057,17): error TS18047: 'last.nodeValue' is possibly 'null'.",
+            "src/client/index.ts(168,51): error TS6142: Module './key-hint-bar.js' was resolved to 'src/client/key-hint-bar.tsx', but '--jsx' is not set.",
+            "src/client/index.ts(169,57): error TS6142: Module './failure-note.js' was resolved to 'src/client/failure-note.tsx', but '--jsx' is not set.",
+            "src/client/index.ts(2171,17): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'.",
+            "src/client/index.ts(2250,13): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'."
+          ],
+          "novelVsBaseline": [],
+          "baselineErrors": 11,
+          "raw": "src/client/accept-guard.ts(51,36): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\nsrc/client/chunk.ts(68,39): error TS2532: Object is possibly 'undefined'.\nsrc/client/chunk.ts(71,33): error TS2532: Object is possibly 'undefined'.\nsrc/client/history.ts(72,68): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.\nsrc/client/index.ts(103,59): error TS6142: Module './settings-card.js' was resolved to '/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.2.2-rc.5/src/client/settings-card.tsx', but '--jsx' is not set.\nsrc/client/index.ts(168,51): error TS6142: Module './key-hint-bar.js' was resolved to '/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.2.2-rc.5/src/client/key-hint-bar.tsx', but '--jsx' is not set.\nsrc/client/index.ts(169,57): error TS6142: Module './failure-note.js' was resolved to '/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/scripts/cross-kernel/.work/type/0.2.2-rc.5/src/client/failure-note.tsx', but '--jsx' is not set.\nsrc/client/index.ts(1057,17): error TS18047: 'last.nodeValue' is possibly 'null'.\nsrc/client/index.ts(2171,17): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'.\nsrc/client/index.ts(2250,13): error TS2341: Property 'attach' is private and only accessible within class 'GhostOverlay'."
+        }
+      },
+      "faceB": {
+        "entry": "/home/wujue/workspace/dsh-plugins/dsh-suggest-ghost/lib/client.js",
+        "bareSpecifiers": [
+          "@deepseek-ai/dsh-client-ui-primitives",
+          "react",
+          "react/jsx-runtime"
+        ],
+        "anchor": "/home/wujue/dsh-versions/0.2.2-rc.5/node_modules/@deepseek-ai/dsh-client-ui-settings/lib/index.js",
+        "resolutionMethod": "createRequire(anchor inside the generation tree).resolve() — real ESM/CJS resolution, not a text scan. NOTE: import.meta.resolve(spec, parentURL) ignores parentURL and cannot be used for rooted resolution.",
+        "treeUnresolved": [
+          "@deepseek-ai/dsh-client-ui-primitives",
+          "react",
+          "react/jsx-runtime"
+        ],
+        "hostSeed": {
+          "available": true,
+          "seedFn": "qJ",
+          "source": "index-Ciz7DZxv.js",
+          "keyCount": 11,
+          "keys": [
+            "react",
+            "react/jsx-runtime",
+            "react-dom",
+            "react-dom/client",
+            "@deepseek-ai/cordis",
+            "zod",
+            "@tanstack/react-virtual",
+            "@deepseek-ai/dsh-client-store",
+            "@deepseek-ai/dsh-client-ui-slots",
+            "@deepseek-ai/dsh-client-ui-primitives",
+            "@deepseek-ai/dsh-client-ui-dockkit"
+          ],
+          "has": {
+            "@deepseek-ai/dsh-client-ui-primitives": true,
+            "react": true,
+            "react/jsx-runtime": true
+          }
+        },
+        "declaredInjectPresence": {
+          "@deepseek-ai/dsh-client-ui-settings": "0.2.2-rc.5",
+          "@deepseek-ai/dsh-client-ui-conversation": "0.2.2-rc.5"
+        },
+        "perSpecifier": [
+          {
+            "specifier": "@deepseek-ai/dsh-client-ui-primitives",
+            "resolvesAgainstTree": false,
+            "resolvesViaHostSeed": true,
+            "publishedAtGenerationVersion": true,
+            "registry": {
+              "checkedVersion": "0.2.2-rc.5",
+              "published": true,
+              "versionCount": 47
             },
             "declaredAsPeerDependency": false,
             "declaredAsDevDependency": true,
@@ -1293,7 +1800,9 @@
       "0.1.7-rc.2",
       "0.2.0-rc.2",
       "0.2.1-rc.2",
-      "0.2.2-alpha.2"
+      "0.2.2-alpha.2",
+      "0.2.2-rc.1",
+      "0.2.2-rc.5"
     ],
     "undetermined": []
   }

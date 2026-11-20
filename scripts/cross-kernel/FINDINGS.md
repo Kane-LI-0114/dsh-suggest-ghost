@@ -29,9 +29,21 @@
 
 ## 0. 声明面（被测对象）
 
+> **当前（2026-11-20）**：矩阵 9 代，末代 `0.2.2-rc.5`（§22）。
+> 下面这个代码块是**历史**（12-05 之前的声明面），已不准确，保留作对照。
+
 ```
 engines.dsh       >=0.1.2-rc.1 <0.2.0-0 || >=0.2.0-rc.2 <0.3.0-0
 6 × dsh-* peers   ^0.1.2-rc.1 || ^0.1.5-rc.1 || ^0.1.7-rc.2 || ^0.2.0-rc.2
+```
+
+今天的实际声明面：
+
+```
+engines.dsh       >=0.1.2-rc.1 <0.2.0-0
+                || >=0.2.0-rc.2 <0.2.2-0
+                || >=0.2.2-alpha.2 <0.2.3-0
+8 × dsh-* peers   ^0.1.2-rc.1 || ^0.1.5-rc.1 || ^0.1.7-rc.2 || ^0.2.0-rc.2 || ^0.2.2-alpha.2
 ```
 
 `engines.dsh` 是一个**单条范围**，不逐代枚举。
@@ -1805,3 +1817,125 @@ ops 消费 0 次 / 消费 2 次 / 发起却无处置），全部符合预期。
 - **UI 面 0.2.2-alpha.2 仍未判定**（预发布线，§20 原记录即如此），本轮没有扩到它。
 - **功能面/UI 面只覆盖 3 代**（0.1.7-rc.2 / 0.2.0-rc.2 / 0.2.1-rc.2）。0.1.2-rc.1、0.1.5-rc.3、
   0.1.7-rc.1 未跑 UI：它们不是当前支持矩阵的主线代次，如需覆盖要另起沙箱，**不当作已验**。
+
+---
+
+## 22. 登记 0.2.2-rc.5 + 修一个**跨代次假红**：peer 自带的嵌套 `node_modules`（2026-11-20）
+
+### 22.1 为什么登这一代
+
+用户 2026-11-20 把宿主从 `0.2.2-rc.4` 升到 **rc.5**。矩阵此前只到 `0.2.2-rc.1`，
+等于「用户实际在跑的那一代」没有验证记录。已登记进 `generations.mjs`（第 9 条）。
+
+实测（现场安装、逐包核对，非软链混版树）：
+
+```
+@deepseek-ai 共 338 项
+  327 项 = 0.2.2-rc.5（含 dsh / dsh-app-boot / dsh-base / dsh-llm / dsh-session 五个被测包）
+  其余 11 项为非同族包，各按自己的版本线：
+    libreoffice-kit / libreoffice-kit-wasm = 0.2.3
+    cordis = 4.1.0   cosmokit = 1.9.0   schemastery = 3.19.0   …
+```
+
+`^0.2.2-alpha.2` 在默认与 `includePrerelease: true` 两种语义下**都匹配** rc.5（已实测）。
+rc.5 的 `dsh-app-boot` 有 `evaluatePluginCompatibility`（4 处命中），门禁面可判。
+
+### 22.2 四面结论
+
+| 面 | 结果 |
+|---|---|
+| 装配 mount | **GREEN**（apply 落痕 Y，契约 = `engines.dsh`） |
+| 门禁 gate | **GREEN**（用 rc.5 自己的 `evaluatePluginCompatibility`，真 manifest 判 MET） |
+| 投影 projection | **GREEN**（modern：`stateSchema` + `wire.view`） |
+| 类型 type | **GREEN**（剥掉嵌套 node_modules 后，见 22.3） |
+| **UI** | **未判定** —— 本轮没跑真 GUI。按 skill §0，「前五面全绿 ≠ 能用」，所以这条必须写成未判定，不能因为其它面绿就默认没事。 |
+
+全量 `verify:kernels`（9 代）：**绿 9 / 红 0 / 未判定 0**。
+门禁分面 EXIT=2 是**既有**问题（0.1.2-rc.1 与 0.1.5-rc.3 的 `dsh-app-boot` 根本没有
+`evaluatePluginCompatibility`，那两代不跑准入闸），不是本轮回归。
+
+### 22.3 假红：`dsh-storage-domain` 自带的嵌套 `zod`
+
+首跑 rc.5 的类型面报了 **5 条新错**，全在 `src/hotness-store.ts`：
+
+```
+(115,5):  error TS2345: Argument of type 'ZodObject<{...}>' is not assignable to
+                       parameter of type 'ZodType<unknown, unknown, ...>'
+(430,27): error TS18046: 'b' is of type 'unknown'
+...
+```
+
+**归因：不是 rc.5 的问题，是「同一个 `zod` 模块有两份类型身份」。**
+
+`dsh-storage-domain` 从 0.2.2-rc.2 起把 `zod` 嵌进自己的 `node_modules`，而本仓 devDeps
+钉的是 4.4.3。TS 按 realpath 认模块身份（同 skill §2 那条假红同源），于是本仓传进去的
+`ZodObject` 不被 peer 那份 `ZodType` 接受，推断也退化成 `unknown`。
+
+受控四组（同一条 `tsc` 命令，只换 zod 摆放）：
+
+| 顶层 zod | peer 内嵌 zod | 错误数 |
+|---|---|---|
+| 4.4.3（本仓） | 4.6.6 | **8** |
+| 4.6.6 | 4.6.6 | 0 |
+| 4.6.7 | 无 | 0 |
+| **4.6.7**（真宿主 profile） | **4.6.6** | **8** |
+
+按代次看，这条错**不专属 rc.5**：
+
+```
+0.2.1-rc.2 / 0.2.2-alpha.2 / 0.2.2-rc.1   内嵌 zod = 4.4.3（== 本仓）  → GREEN
+0.2.2-rc.2 / rc.3 / rc.4 / rc.5           内嵌 zod = 4.6.6（≠ 本仓）  → 必 RED
+```
+
+rc.2 ~ rc.4 **从没进过代次表**，所以这个假红一直没被发现；临时手工构造 rc.4 的 overlay
+同样是 8 条错（已验证）。
+
+### 22.4 修法：overlay 里剥掉 peer 的嵌套 `node_modules`
+
+`type-surface.mjs` 新增 `dedupePeerNestedModules()`：拷完 peer 后删除每个 peer 目录下的
+`node_modules`，让 peer 只能解析到 overlay 顶层那一份（单一类型身份）。被剥掉的依赖
+逐条记进 `faceA.dedupedNestedModules`，读数可复核而不是"悄悄改了环境"。
+
+rc.5 实际剥掉 3 条，全是 `zod`：`dsh-llm` / `dsh-session-projection` / `dsh-storage-domain`。
+
+剥完 9 代全绿（`exit=0 red=[] undetermined=[]`）。**这里测的才是单一变量**：peer 的
+`.d.ts` 是哪一代，而不是"依赖树怎么摆"。
+
+### 22.5 这个"剥"**不等于**真宿主上没有双实例
+
+真宿主（`~/.npm/_npx/b86ed90107c62dab` + `~/.dsh/profiles/web`）实测：
+
+```
+插件侧 zod              → ~/.dsh/profiles/web/node_modules/zod           = 4.6.7
+dsh-storage-domain 内部 → …/dsh-storage-domain/node_modules/zod          = 4.6.6
+```
+
+**确实两份。但运行时是好的**，三条证据：
+1. 用真宿主树跑 `defineDomain` + `descriptorOf` 成功，记录校验正确通过/拒绝；
+2. `cross parse good: true | cross parse bad: false` —— 跨实例不破坏校验语义；
+3. 真宿主 `~/.dsh/storages/suggest_ghost_hotness.json` 有 **2000 条**记录，2026-11-20 13:26 仍在更新。
+
+原因是 zod schema 是**鸭子类型**（有 `safeParse` 就能用），不靠 `instanceof`。
+所以这是**编译期噪声**，不是运行时缺陷——但值得记一条：如果哪天 zod 改成按
+`instanceof` 判 schema，这个双实例形态才会变成真问题。
+
+### 22.6 顺带发现（**不在**本插件范围内，未处理）
+
+升级到 rc.5 后日志里重复出现：
+
+```
+dsh: disabling profile plugin row "webhook-runtime":
+Plugin @deepseek-ai/dsh-webhook@0.2.2-rc.1 is incompatible with dsh 0.2.2-rc.5
+```
+
+`webhook-runtime` 属 `webhook-listener` 组，而 **`gitea-dispatch` 也在该组内**
+（profile 里写明「⚠️ gitea-dispatch 必须留在 webhook-listener 组内」）。
+即 `dsh-webhook` 停在 rc.1、跟不上 rc.5，**Gitea webhook 派发可能已失效**。
+这是宿主/插件依赖问题，本仓不动，只登记事实。
+
+### 22.7 supersedes / 未判定
+
+- `out/type.json` 本轮覆盖 2026-11-05 那份；旧读数里 rc.2~rc.4 从未被测，无冲突。
+- `out/across-kernels-2026-11-20T05-37-33-498Z.json` 取代 11-05 同类产物。
+- **rc.5 的 UI 面未判定**，且 rc.2 / rc.3 / rc.4 三代**从未进过矩阵**（不在代次表里）；
+  它们是否支持**没有结论**，不能被 rc.5 的读数顺带覆盖。

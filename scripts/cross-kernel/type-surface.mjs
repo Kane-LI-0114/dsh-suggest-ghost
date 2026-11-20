@@ -39,7 +39,36 @@
  * **结论：peer 必须 materialize 成 overlay 内的实体目录（`cp -rL`），不能用外指软链。**
  * 任何用软链换 peer 类型的队友都在读同一个假象。
  *
- * ## 3. FACE B 不能用 node_modules 解析当判据
+ * ## 3. peer 自带的**嵌套 node_modules** 是第二个假红来源
+ *
+ * `dsh-storage-domain` 从 0.2.2-rc.2 起把 `zod` 嵌进自己的 `node_modules`（4.6.6），
+ * 而本仓 devDeps 钉的是 4.4.3。于是同一个模块在 TS 眼里有**两份类型身份**：
+ * 本仓传进去的 `ZodObject` 不被 peer 的 `ZodType` 接受。
+ *
+ * 受控四组（同一条 `tsc` 命令，只换 zod 摆放）：
+ *
+ * | 顶层 zod | peer 内嵌 zod | 结果 |
+ * |---|---|---|
+ * | 4.4.3（本仓） | 4.6.6 | **8 条错**（`hotness-store.ts`） |
+ * | 4.6.6 | 4.6.6 | 0 |
+ * | 4.6.7 | 无 | 0 |
+ * | 4.6.7 | 4.6.6 | **8 条错**（== 真宿主实际形态） |
+ *
+ * 按代次看**不是 rc.5 独有**：0.2.1-rc.2 / alpha.2 / rc.1 的内嵌 zod 恰是 4.4.3（== 本仓）
+ * 所以绿；0.2.2-rc.2 / rc.3 / rc.4 / rc.5 的内嵌是 4.6.6，换进去必然红——而 rc.2~rc.4
+ * 从没进过代次表，这个假红一直没被发现。
+ *
+ * 本脚本要测的是「peer 的 **API 形状/签名**漂移会不会打断编译」，「同一模块两份类型身份」
+ * 是**依赖树形态**问题。故 overlay 里**剥掉 peer 的嵌套 node_modules**，让 peer 解析到
+ * overlay 顶层那一份（单一类型身份）。剥了才回到单一变量：peer 的 `.d.ts` 是哪一代。
+ *
+ * ⚠️ 这不等于真宿主上没有双实例。真宿主上插件侧 zod 是 profile 的 4.6.7、storage-domain
+ * 内嵌 4.6.6，确实两份；但运行时安全——zod schema 是鸭子类型（有 `safeParse` 即可用），
+ * 实测 `defineDomain` / `descriptorOf` / 记录校验全部正常，真宿主
+ * `~/.dsh/storages/suggest_ghost_hotness.json` 2000 条照常读写。所以那是**编译期噪声**，
+ * 不是运行时缺陷。
+ *
+ * ## 4. FACE B 不能用 node_modules 解析当判据
  *
  * `lib/client.js` 是**浏览器包**，由宿主 `window.__ModuleLoader__` 的 `require` 解析
  * （`build.mjs` 用 `packages:'external'`，故 `react`/`primitives` 不打包）。
@@ -200,6 +229,9 @@ function buildOverlay(generationId) {
       missing.push(p);
     }
   }
+  // ---- 去重：剥掉 peer 自带的嵌套 node_modules（见文件头 §3）----
+  const deduped = dedupePeerNestedModules(work);
+
   // overlay 实际被 tsc 读到的 @deepseek-ai 版本戳（比树 mtime 更接近"判的是什么字节"）。
   const overlayVersions = {};
   const ods = join(work, 'node_modules', '@deepseek-ai');
@@ -207,7 +239,56 @@ function buildOverlay(generationId) {
     const v = pkgVersion(join(ods, entry));
     if (v !== null) overlayVersions[entry] = v;
   }
-  return { work, mounted, missing, overlayVersions };
+  return { work, mounted, missing, overlayVersions, deduped };
+}
+
+/**
+ * 剥掉每个 peer 目录下自带的 `node_modules`，让 peer 只能解析到 overlay 顶层的
+ * 那一份（本仓 devDeps 钉的版本）。
+ *
+ * ## 为什么必须剥（§3 的一个实测假红）
+ *
+ * `dsh-storage-domain` 从 0.2.2-rc.2 起把 `zod` **嵌进自己的 `node_modules`**
+ * （内嵌 4.6.6），而本仓 devDeps 钉的是 4.4.3。两棵类型树对同一个 `zod` 模块
+ * 有**不同的类型身份**，`ZodObject` 在 TS 眼里就不认识对方的 `ZodType`。实测受控四组：
+ *
+ *   顶层4.4.3 + 内嵌4.6.6 → 8 条错（`hotness-store.ts` 的 `ZodObject` 不兼容 + 推断退化成 unknown）
+ *   顶层4.6.6 + 内嵌4.6.6 → 0（统一身份）
+ *   顶层4.6.7 + 无内嵌  → 0（统一身份）
+ *   顶层4.6.7 + 内嵌4.6.6 → 8 条错（== 真宿主的实际形态）
+ *
+ * 按代次看这条错**不是 rc.5 独有**：0.2.1-rc.2 / 0.2.2-alpha.2 / 0.2.2-rc.1 的内嵌
+ * zod 恰好是 4.4.3（== 本仓），所以它们绿；0.2.2-rc.2/rc.3/rc.4/rc.5 的内嵌是 4.6.6，
+ * 换进去必然红——而 rc.2~rc.4 从没进过代次表，所以这个假红一直没被发现。
+ *
+ * 本脚本要回答的是「**API 形状/签名漂移**会不会打断本仓编译」，而"同一模块的两份类型
+ * 身份"是**依赖树形态**问题，不是代次差异。留着它，读数就会被这个常量噪声盖住。
+ * 剥掉之后才回到单一变量：peer 的 `.d.ts` 是哪一代。
+ *
+ * ⚠️ 剥掉**不等于**真宿主上没有双实例：真宿主上插件侧 zod 是 profile 的 4.6.7、
+ * storage-domain 内嵌 4.6.6，确实两份。但运行时是安全的——zod 的 schema 是鸭子类型
+ * （有 `safeParse` 即可用），实测 `defineDomain` / `descriptorOf` / 记录校验全部正常，
+ * 真宿主 `~/.dsh/storages/suggest_ghost_hotness.json` 有 2000 条在正常读写。
+ * 所以这是**编译期噪声**，不是运行时缺陷。
+ */
+function dedupePeerNestedModules(work) {
+  const stripped = [];
+  const ods = join(work, 'node_modules', '@deepseek-ai');
+  for (const entry of readdirSync(ods)) {
+    const nested = join(ods, entry, 'node_modules');
+    if (!existsSync(nested)) continue;
+    for (const dep of readdirSync(nested)) {
+      const p = join(nested, dep);
+      try {
+        const v = pkgVersion(p);
+        stripped.push({ peer: entry, dep, version: v });
+      } catch {
+        stripped.push({ peer: entry, dep, version: null });
+      }
+    }
+    rmSync(nested, { recursive: true, force: true });
+  }
+  return stripped;
 }
 
 /** 跑一次 tsc；返回 { code, errors[], raw }。 */
@@ -438,7 +519,9 @@ function main() {
     record.faceA = {
       overlayDir: overlay.work,
       method:
-        'isolated temp copy; peers materialized as REAL dirs via cp -rL (never outside-pointing symlinks — that produces a false red, see header §2)',
+        'isolated temp copy; peers materialized as REAL dirs via cp -rL (never outside-pointing symlinks — that produces a false red, see header §2); ' +
+        'nested node_modules stripped so each peer resolves the overlay-top copy (single type identity — see header §3)',
+      dedupedNestedModules: overlay.deduped,
       mountedPeers: overlay.mounted,
       missingPeers: overlay.missing,
       overlayVersions: overlay.overlayVersions,
@@ -622,6 +705,7 @@ function main() {
     pitfallsRecorded: [
       'tsconfig.json excludes src/client => the literal Face A command is a host-only green (verified via --listFiles: 16 src files, 0 client files).',
       'outside-pointing symlinks for peers produce a FALSE RED (18 phantom errors on 0.2.0-rc.2) via TS realpath/module-identity; peers must be materialized as real dirs.',
+      'peers carrying their own nested node_modules (dsh-storage-domain ships zod 4.6.6 from 0.2.2-rc.2 on, while this repo pins 4.4.3) give the SAME module two type identities -> FALSE RED (8 errors in hotness-store.ts). Controlled A/B: top4.4.3+nested4.6.6=8, top4.6.6+nested4.6.6=0, top4.6.7+none=0, top4.6.7+nested4.6.6=8. Not generation-specific: rc.2/rc.3/rc.4 would red identically. Nested node_modules are now stripped, so the reading is a single variable (which generation the peer .d.ts is).',
       'import.meta.resolve(spec, parentURL) ignores parentURL — unusable for rooted resolution.',
       'tree node_modules absence != runtime failure: the host __ModuleLoader__ seed table is consulted first.',
       'tree node_modules absence != never published: must check the npm registry separately.',
