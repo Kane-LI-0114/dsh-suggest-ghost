@@ -1939,3 +1939,68 @@ Plugin @deepseek-ai/dsh-webhook@0.2.2-rc.1 is incompatible with dsh 0.2.2-rc.5
 - `out/across-kernels-2026-11-20T05-37-33-498Z.json` 取代 11-05 同类产物。
 - **rc.5 的 UI 面未判定**，且 rc.2 / rc.3 / rc.4 三代**从未进过矩阵**（不在代次表里）；
   它们是否支持**没有结论**，不能被 rc.5 的读数顺带覆盖。
+
+### 22.8 真 GUI 面补跑（2026-11-20，0.2.2-rc.5）
+
+**结论：GREEN。** 幽灵真的上屏了，截图是 `docs/cross-kernel-shots/0.2.2-rc.5-ui-ghost.png`。
+
+现场：沙箱真宿主（`DSH_HOME=~/dsh-sbx-suggest-ghost`，内核 0.2.2-rc.5）+ 真 Chromium
+（`chromium-1248`，CDP `Input.insertText` / `Input.dispatchKeyEvent` 真事件）→ 在
+「新会话」里发一句真问题 → 等真模型回合结束 → 轮询 `#dsh-suggest-ghost-overlay`。
+
+判据（只认用户能感知的入口，不调内部 handler）：
+
+```
+data-shown  = 1
+display     = block
+text        = "保留改动撤销，执行 git reset --soft HEAD~1"   (33 字符)
+_push.text  = 同一句（取自 cordis.patch.yml 的实际载荷，与屏幕一致）
+_push.completion.text = "只要一条命令，不用解释原理。"（续写那一路也真产出了）
+```
+
+截图里能同时看到：侧栏工作区 `ws`、用户提的那句问题、模型回答（含 `git reset --soft HEAD~1`）、
+以及 composer 里那条浅灰幽灵 —— 即**用户实际看见的那一帧**，不是重建图。
+
+### 22.9 为了跑到这一步，踩了 6 个坑（都会伪装成"这代次不支持"）
+
+按 skill §1b 那张表逐条记，因为每一个单独发生都足以得出"插件坏了"的错误结论：
+
+1. **工作区设不上** ⇒ composer 永远 `inert`。rc.5 的「选择工作区」是个**原生目录选择器**
+   （`dsh-client-ui-directory-picker-native` 走 `directoryPicker.pick()`），headless 下
+   点它**什么都不会发生**（`/api/workspace/initializeDefault` 回 200 但工作区仍为空）。
+   ⇒ 手工写 `storages/workspace.json` 造一条记录。**记录必须带 `createdAt`/`updatedAt`**，
+   只写 `path/title/sessionIds` 会让 `dsh-workspace` 报
+   `Invalid input: expected string, received undefined`，整条 `workspaceRegistry` fiber 停在
+   pending，`session-controller` / `webhook-runtime` 跟着全挂。
+2. **`--deploy` 不能把 `--home` 自己当源**：`rmSync(<dest>/lib)` 与 `cp -rp <src>/lib <dest>`
+   是同一目录时，它先删掉源再拷 ⇒ plugin/lib 消失。用**仓库根**作源。
+3. **`--deploy` 模式不会刹易失载荷**（`_push`/`_hot` 上一次运行的残留会一直挂着）。
+   ⇒ 上轮 `_push.text="（无输出）"` 在屏幕上冒充成"本轮建议"，截图拿到的是**上一轮的脏数据**。
+   必须开跑前用 `stripEntryVolatileKeys` 手工剥一次。
+4. **手工按行删 `_push` 会破坏 YAML**：`_hot` 是跨多行的块标量，按行删只删掉第一行，
+   剩下的续行变成孤儿 ⇒ `Plugin entry "suggest-ghost" is no longer configurable`。
+   必须用仓库自带那个理解 YAML 边界的剥除器。
+5. **`cdpType` 打完整句后焦点会掉回 `body`**（探针记下 `aeTag=BODY`）：composer 受控重渲染
+   会替换掉节点，紧随其后的回车打到 body 上，草稿原样留在框里。
+   表现 `submit.neither draftLeft=36`，与"这代次发不出消息"一模一样。⇒ **敲回车前必须重新聚焦**。
+6. **提交判据不能读 `[role="textbox"]`**：rc.5 上 composer 与 `[role=textbox]` 是同一 DIV，
+   但更早的代次不是；读错节点会永远得到 0 ⇒ 判成"已提交"而 turn 从没发出去。
+
+另记一条**模型侧**（不是插件缺陷）：同一个问题两次拿到 `"（无输出）"` 这种空正文，
+换一句更具体的问题就有正文。按 skill 的纪律，这要**换问题重试**，不能记成插件缺陷。
+
+### 22.10 沙箱结构性缺陷（不是产品问题，但会污染读数）
+
+`dev-sandbox` 把插件产物拷成 `<home>/plugin` 实体副本，**不挂 `node_modules`**。
+而本插件 `lib/stream-service.js` 要 `import '@deepseek-ai/dsh-typert-protocol'`，
+真宿主能解析是因为 `profiles/web/node_modules/dsh-suggest-ghost` 软链到**仓库**
+（仓库有 `node_modules`）。沙箱里那份副本没有 ⇒
+
+```
+[dsh-suggest-ghost][ops-trace] typert protocol import failed (ERR_MODULE_NOT_FOUND)
+[stream-register-failed #1]
+```
+
+⇒ **流式投递在沙箱里从没注册上**，但"幽灵照常出现"，所以这个缺陷**不表现为 FAIL**，
+只表现为"流式那一路是死的"。修法是给 `<home>/plugin/node_modules` 挂仓库的软链
+（本次手工做了，没有改脚本——改脚本会影响所有跑 dev-sandbox 的仓）。

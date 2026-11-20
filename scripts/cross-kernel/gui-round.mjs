@@ -200,8 +200,14 @@ const cdpType = async (focusExpr, text, enter = false) => {
   if (!ok) return false;
   await sleep(150);
   await send('Input.insertText', { text });
-  await sleep(200);
+  await sleep(700);
   if (enter) {
+    // ⚠️ **必须重新聚焦**（0.2.2-rc.5 实测，探针记下的 astTag=BODY）：insertText 之后
+    //    composer 会因受控重渲染被替换掉，焦点回到 body ⇒ 紧随其后的回车打到 body 上，
+    //    草稿原封不动留在框里，`submit.neither draftLeft=N`，看着完全像"这代次发不出消息"。
+    //    只在打字前聚焦一次是不够的；每敲回车之前都要确认 activeElement 还是 composer。
+    const stillFocused = await evaluate(`(() => { const n = (${focusExpr})(); if (n == null) return false; n.focus(); return document.activeElement === n; })()`);
+    if (!stillFocused) return 'refocus-failed';
     await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13, text: '\r', unmodifiedText: '\r' });
     await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
   }
@@ -364,23 +370,30 @@ try {
       return { found: true, label: window.__gy.name(b).slice(0, 24) };
     })()`);
     const typed = await cdpType('() => window.__gy.q(\'[role="textbox"]\') ?? window.__gy.composer()', ASKS[attempt], true);
+    const probeAfterType = await evaluate(`(() => { const c = document.querySelector('[data-composer-input]'); const ae = document.activeElement;
+      return { draft: (c?.textContent ?? '').trim().length, aeTag: ae?.tagName ?? null, aeIsComposer: c != null && ae === c,
+        aeRole: ae?.getAttribute?.('role') ?? null, aeAria: (ae?.getAttribute?.('aria-label') ?? '').slice(0, 20) }; })()`);
     // ⚠️ 提交要**验**：回车在某些代次的 composer 上只插换行、不发送（表现为 typed=true 而宿主
     //    一个事件都收不到 ⇒ 没有 turn/end ⇒ 没有 suggestion ⇒ 看起来像"这代次不生成建议"）。
     //    判据：回车后草稿若还在 ⇒ 点发送按钮兜底，并把两条路径的结果都记进 ts。
     const ts = await evaluate(`(async () => {
       const g = window.__gy;
-      const stillThere = (g.q('[role="textbox"]')?.textContent ?? g.composer()?.textContent ?? '').trim().length;
-      if (stillThere === 0) return { submitted: true, how: 'enter' };
+      // 判据必须读 composer 自己的文本，不能读 [role="textbox"]。
+      // 0.2.2-rc.5 实测：composer 是 div[data-composer-input]，不具备 textbox 角色，
+      // 页面上另有一个常驻的 [role="textbox"]（草稿镜像）。旧写法读到那个不相干的节点、
+      // 永远 0 => 判成 submitted:true 而 turn 从没发出去，现象和「这代次不生成建议」一样。
+      const draftLen = () => (g.q('[data-composer-input]')?.textContent ?? '').trim().length;
+      if (draftLen() === 0) return { submitted: true, how: 'enter' };
       const send = g.byText('发送消息') ?? g.byText('发送') ?? g.byText('Send');
-      if (send != null && send.disabled !== true) { send.click(); await g.wait(600); }
-      const left = (g.q('[role="textbox"]')?.textContent ?? g.composer()?.textContent ?? '').trim().length;
+      if (send != null && send.disabled !== true) { send.click(); await g.wait(800); }
+      const left = draftLen();
       return { submitted: left === 0, how: left === 0 ? 'send-button' : 'neither', draftLeft: left };
     })()`);
     const got = await evaluate(`(async () => {
       const ok = await window.__gy.until(() => { const g = window.__gy.ghost(); return g.exists === true && g.shown === true && g.visible === true && g.chars > 0; }, ${Math.max(20000, Math.floor(GHOST_TIMEOUT_MS / ASKS.length))});
       return { ok, ghost: window.__gy.ghost() };
     })()`);
-    rounds.push({ ask: ASKS[attempt].slice(0, 24), newSession: ns, typed, submit: ts, ...got });
+    rounds.push({ ask: ASKS[attempt].slice(0, 24), newSession: ns, typed, probeAfterType, submit: ts, ...got });
     if (got.ok === true) { appeared = got; break; }
   }
   out.steps.rounds = rounds;

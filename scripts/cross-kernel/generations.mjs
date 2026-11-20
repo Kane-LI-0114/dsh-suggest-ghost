@@ -253,7 +253,9 @@ export const KERNEL_GENERATIONS = [
       'dsh / dsh-app-boot / dsh-base / dsh-llm / dsh-session 五个被测包**全部 0.2.2-rc.5**。' +
       '`^0.2.2-alpha.2` 在默认与 includePrerelease 两种语义下都匹配本代（已实测）。' +
       'rc.5 的 dsh-app-boot **有** `evaluatePluginCompatibility`（4 处命中），门禁面可判。' +
-      '⚠️ 本代**未跑真 GUI 面**（见 docs/ 与 skill §0：装配绿不等于用户看得见）；' +
+      '✅ 2026-11-20 补跑**真 GUI 面**：沙箱真宿主 + 真 Chromium，发真问题 → 真模型回合 → ' +
+      '幽灵真上屏（`data-shown=1`、`display=block`、文本 33 字符，截图 ' +
+      '`docs/cross-kernel-shots/0.2.2-rc.5-ui-ghost.png`）。六面齐（详见 FINDINGS §22.8）。' +
       '本代是 rc：**不构成对 0.2.2 正式版的承诺**。',
   },
 ];
