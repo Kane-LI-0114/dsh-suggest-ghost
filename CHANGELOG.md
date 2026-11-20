@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### 修复
+
+- **长建议在输入框右侧折成窄栏：折行后的续行不再跟着「行尾那一列」走**
+  （[GitHub #9](https://github.com/dsh-plugin-collection/dsh-suggest-ghost/issues/9)，PR
+  [#10](https://github.com/dsh-plugin-collection/dsh-suggest-ghost/pull/10)）。
+  输入框已有草稿时，历史补全的灰字第一行接在光标后是对的，但折行之后的每一行都从光标那一列起排，
+  在右侧挤成窄栏；按 Tab 采纳后同一段文字却折回内容左缘。根因在 `GhostOverlay.align()` 的盒子口径：
+  overlay 被摆在草稿行尾、宽度只取「行尾到行末」那一段，于是它自己折出来的每一行都从行尾那一列起排
+  ——而编辑器会把续行折回**内容左缘**、用满整行。后果不只是难看：灰字比采纳后的正文**多占一行**
+  （实测 3 行 → 2 行），行尾离右缘只剩 2px 时一段建议会被折成 32 行、每行 2px 宽。
+  修法：盒子改成整行全宽（left = 内容原点、width = 内容宽），首行用 `text-indent` 顶到草稿行尾；
+  盒子算术抽成纯函数 `src/client/overlay-geometry.ts`（`align()` 只喂测量值、写样式）；
+  自检改量**第一个字**而不是盒子左缘，并接受「贴边整体折到下一行」这一合法落点；
+  overlay 加 `::before{content:"\200b"}`，补上 CSS「一行至少放一个字符」缺的那个断点
+  （用 generated content 而非往 `textContent` 塞字符：采纳闸读的「屏幕上那句话」不能多一个看不见的字符）。
+  验证：新增 `scripts/overlay-geometry-smoke.mjs`（纯函数 7 条，含反向守卫「行尾越靠右，盒子不得越窄」）
+  进 `test:smoke`；新增 `scripts/ghost-wrap-probe.mjs`（真产物 + 真 Chromium，与「同一段文字真的插进
+  编辑器之后」逐行比对行首）进 `test:e2e`，找不到 Chrome 时报 NOT-COVERED 而不是 PASS。
+  **先红后绿两次读数**：同一份探针 `--bundle` 指向修复前的 `lib/client.js` ⇒
+  `2 通过, 3 失败`（A 场景第 2 行灰字 `left=601.64` / 采纳后 `left=14`；贴边场景 32 行、盒子宽 2）；
+  指向修复后 ⇒ `5 通过, 0 失败`（盒子宽 898 = 内容宽 898，`text-indent` 541.56）。
+  顺带修掉 `scripts/regen-pending-smoke.mjs` 的一条假红：杀 Chrome 后立刻 `rmSync` 会撞 ENOTEMPTY，
+  而它抛在 `finally` 里被记成「行为对照未能运行」——改成带重试的删除，判据一行没动。
+
 ## [0.11.1] - 2026-11-19
 
 ### 新增
