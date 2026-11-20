@@ -7,6 +7,9 @@
  *  2. 放出去的那一份**内容必须是当前热表**（含刚合并掉的那条），否则让路只是"提前写了旧的"；
  *  3. **让路不产生额外写**：槽里没有攒着时，再来一次 `complete` ⇒ 含 `_hot` 的写次数为 0
  *     （按格判重还在，这是"推广让路"不等于"每键一次写"的证据）；
+ *  3b. **面板操作（add / delete）立刻把热表推回客户端**（#179）：宿主改完热表就得让
+ *     卡片看见，而不是等下一次推送时机 —— 缺这一步时删除/固定/新增全都"点了没反应"，
+ *     再点一次更是彻底 no-op（表里已经没有那条文本）；
  *  4. **写次数 ≤ 待写变化数**（判据 ③ 的前半句，断言 6）：写次数由变化数封顶，
  *     不由 `complete` 的次数封顶 —— 后半句「无待写时不写」是断言 3。
  *  5. **窗口本身没被动过**（`HOT_PUSH_WINDOW_MS` 仍是 1000）—— 任务书明写"调小窗口是钝器"，
@@ -179,34 +182,86 @@ run('4) 窗口常量没被改动（本条修的是让路，不是缩窗口）', 
     `HOT_PUSH_WINDOW_MS=${HOT_PUSH_WINDOW_MS} ⇒ 任务书明写"调小窗口是钝器"，改它要另立一条并重新量代价`);
 });
 
-// ── 5) 单独造一个「只有热度变、建议格一字未动」的现场再让路 ────────────────────
-// 为什么不能拿上面那次 complete 的写来判：那一拍**建议格本来就是脏的**（第二个回合刚产出
-// 新建议），带 `_push` 是正确行为。我第一版就是拿它判的，于是把「建议格确实变了」读成了
-// 「让路牵连重写了建议格」——假红。正确的现场是 `_ops.add`：只改热表，不碰建议。
-// （顺带证实一条既有行为：`add` 之后**没有任何写**发生，热表变化要等下一次推送时机。）
+// ── 5) 面板 op（#179）：改完热表必须**立刻**推回客户端 ──────────────────────────
+// 为什么这条以前「没有写发生」是对的、现在必须改：`consumeOps` 历史上只对 `pull`/`complete`
+// 应答，热表层应用完就 flush 收工 ⇒ 管理面板的删除/固定/新增**全都没有回推**。症状正是
+// 「点删除没反应」：宿主内存里删了、盘上也删了，设置卡仍按旧的 `_hot` 渲染；再点一次更
+// 彻底无效——表里已经没有那条文本，`deleteEntry` 是 no-op（`changed=0`）。修法是在
+// `changed > 0` 之后补一次 `pushToClient(..., {hotNow:true})`。
+//
+// 现场用 `add`：它只改热表、不碰建议，因此那一笔写**只该带 `_hot`**（建议格一字未动就
+// 不该写）。两件事一起判：① #179 的即时刷新 ② 面板刷新不牵连建议格。
 const beforeAdd = writes.length;
+const tAdd = Date.now();
 await settings.update(NS, {
   _ops: JSON.stringify({ rev: 7, ops: [{ op: 'add', text: '把预发环境的端口改成 4199' }] }),
 });
-await sleep(60);
-const afterAdd = writes.slice(beforeAdd).filter((w) => w.cells.includes('_hot'));
-const beforeThird = writes.length;
+await sleep(80);
+const addSlice = writes.slice(beforeAdd);
+const afterAdd = addSlice.filter((w) => w.cells.includes('_hot'));
+const addHot = afterAdd.length ? JSON.parse(String(afterAdd[afterAdd.length - 1].patch._hot)) : null;
+run('5) 面板 `add` 立刻把新热表推回客户端，且那一笔只带 `_hot`（建议格一字未动）', () => {
+  assert.ok(afterAdd.length >= 1,
+    `add 之后一次 _hot 都没写 ⇒ 面板改了热表却不回推（#179 的原症状：界面停在旧的那一份）；cells=${JSON.stringify(addSlice.map((w) => w.cells))}`);
+  assert.ok(Math.max(...afterAdd.map((w) => w.at - tAdd)) < HOT_PUSH_WINDOW_MS,
+    `回推等了 ${Math.max(...afterAdd.map((w) => w.at - tAdd))}ms ≥ 窗口 ⇒ 走的是合并窗口而不是 hotNow`);
+  assert.ok(addHot !== null && (addHot.hot ?? []).some((e) => String(e.text).includes('4199')),
+    `回推的载荷里没有刚加的那条 ⇒ 推的是旧快照：${String(JSON.stringify(addHot)).slice(0, 200)}`);
+  const withPush = addSlice.filter((w) => w.cells.includes('_push'));
+  assert.equal(withPush.length, 0,
+    `面板刷新顺带重写了建议格 ${withPush.length} 次（建议格一字未动就不该写）：cells=${JSON.stringify(addSlice.map((w) => w.cells))}`);
+});
+
+// 5b) 删除（用户报的那一条）：删完必须回推，且推出去的载荷里**没有**那条文本。
+const beforeDelete = writes.length;
+const tDelete = Date.now();
 await settings.update(NS, {
-  _ops: JSON.stringify({ rev: 8, ops: [{ op: 'complete', sessionId: SESSION, draft: '把预发' }] }),
+  _ops: JSON.stringify({ rev: 9, ops: [{ op: 'delete', text: '把预发环境的端口改成 4199' }] }),
 });
 await sleep(80);
-const yieldCells = writes.slice(beforeThird).map((w) => w.cells);
-const yieldHotOnly = writes.slice(beforeThird).filter((w) => w.cells === '_hot');
-run('5) 只有热度变时让路 ⇒ 那一次写只带 `_hot`，建议格一字不动', () => {
-  assert.equal(afterAdd.length, 0,
-    `add 之后立刻就写了 ${afterAdd.length} 次 _hot ⇒ 现场没造出来（窗口没在计时）`);
-  assert.ok(yieldHotOnly.length >= 1,
-    `让路没写出「只带热度格」的写：cells=${JSON.stringify(yieldCells)}`);
-  const withPush = writes.slice(beforeThird).filter((w) => w.cells.includes('_push'));
-  assert.equal(withPush.length, 0,
-    `让路顺带重写了建议格 ${withPush.length} 次（建议格一字未动就不该写）：cells=${JSON.stringify(yieldCells)}`);
-  assert.ok(traced.filter((l) => /hot push yielded on input/.test(l)).length >= 2,
-    '让路留痕少于 2 行 ⇒ `add` 那条路径（槽是空的、但窗口开着）没被观测到，可观测性缺一半');
+const deleteSlice = writes.slice(beforeDelete);
+const afterDelete = deleteSlice.filter((w) => w.cells.includes('_hot'));
+const deleteHot = afterDelete.length ? JSON.parse(String(afterDelete[afterDelete.length - 1].patch._hot)) : null;
+run('5b) 面板 `delete` 立刻回推，且载荷里不再有被删的那条（「点删除没有效」的正面判据）', () => {
+  assert.ok(afterDelete.length >= 1,
+    `delete 之后一次 _hot 都没写 ⇒ 删除在界面上依然是 no-op；cells=${JSON.stringify(deleteSlice.map((w) => w.cells))}`);
+  assert.ok(deleteHot !== null && !(deleteHot.hot ?? []).some((e) => String(e.text).includes('4199')),
+    `回推的快照里还留着被删的那条 ⇒ 客户端会继续显示这个幽灵行：${String(JSON.stringify(deleteHot)).slice(0, 200)}`);
+  assert.ok(Math.max(...afterDelete.map((w) => w.at - tDelete)) < HOT_PUSH_WINDOW_MS,
+    `删除回推等了 ${Math.max(...afterDelete.map((w) => w.at - tDelete))}ms ≥ 窗口`);
+});
+
+// 5c) 重复删除（同一条已经不在表里）：`changed === 0` ⇒ **不许**再写一格。
+// 这是 `changed > 0` 那道闸门的另一半：没有改动就没有新信息，写一次只是白顶一格 revision。
+const beforeRepeat = writes.length;
+await settings.update(NS, {
+  _ops: JSON.stringify({ rev: 10, ops: [{ op: 'delete', text: '把预发环境的端口改成 4199' }] }),
+});
+await sleep(80);
+const repeatHot = writes.slice(beforeRepeat).filter((w) => w.cells.includes('_hot'));
+run('5c) 重复删除（表里已无此条）不产生热度写（`changed > 0` 闸门有效）', () => {
+  assert.equal(repeatHot.length, 0,
+    `no-op 的 delete 也写了 ${repeatHot.length} 次 _hot ⇒ 每次点击都白顶一格 revision：`
+    + `cells=${JSON.stringify(writes.slice(beforeRepeat).map((w) => w.cells))}`);
+});
+
+// ── 5d) 面板刷新之后窗口重新起算：热表没再变时，紧跟的 `complete` 一个字节都不写 ──
+// 这一条防的是「把 `hotNow` 一路开到所有路径上」——那样每次 complete 都会重写热表。
+const beforeThird = writes.length;
+await settings.update(NS, {
+  _ops: JSON.stringify({ rev: 11, ops: [{ op: 'complete', sessionId: SESSION, draft: '把预' }] }),
+});
+await sleep(80);
+const thirdSlice = writes.slice(beforeThird);
+run('5d) 热表没再变时，紧跟的 `complete` 不重写任何一格（`hotNow` 没有变成"每次都写"）', () => {
+  const thirdHot = thirdSlice.filter((w) => w.cells.includes('_hot'));
+  assert.equal(thirdHot.length, 0,
+    `热表内容没变却又写了 ${thirdHot.length} 次 _hot ⇒ 判重被绕过了：cells=${JSON.stringify(thirdSlice.map((w) => w.cells))}`);
+  const thirdPush = thirdSlice.filter((w) => w.cells.includes('_push'));
+  assert.equal(thirdPush.length, 0,
+    `建议格也没变却重写了 ${thirdPush.length} 次：cells=${JSON.stringify(thirdSlice.map((w) => w.cells))}`);
+  assert.ok(traced.filter((l) => /hot push yielded on input/.test(l)).length >= 1,
+    '一次让路留痕都没有 ⇒ 本脚本的让路路径没被观测到');
 });
 
 // ── 6) 判据 ③ 的**前半句**：让路的写次数 ≤ 待写变化数 ─────────────────────────
@@ -214,6 +269,11 @@ run('5) 只有热度变时让路 ⇒ 那一次写只带 `_hot`，建议格一字
 // 写次数由**热度内容的变化数**决定，**不由 `complete` 的次数决定**。
 // 口径必须落在内容上而不是字节上：载荷里带 `rev`，每写一次就 +1 ⇒ 拿原始字节比原始字节
 // 会永远"不一样"，这个判据会假绿（同一类坑已在 #41 的量度里记过一次，比较前必须剥 rev）。
+//
+// ⚠️ #179 之后**不能**再用「不同内容的去重集合」当上界：面板操作（add → delete）会
+// 把热表带回**先前那个状态**，A→B→A 是一次真实的两次变化、但只有两个不同快照。
+// 所以判据改成「每一次带 `_hot` 的写都与**上一次**写的热表内容不同」——这才是
+// 「写次数由变化数封顶」的可判形式，同时仍然挡住「每键一次写」那个形态。
 const stripRev = (raw) => {
   if (typeof raw !== 'string' || raw === '') return null;
   try {
@@ -228,7 +288,9 @@ const hotWriteInfos = writes
   .map((w) => stripRev(w.patch._hot))
   .filter((x) => x !== null);
 const duplicateWrites = hotWriteInfos.filter((x, i) => i > 0 && x === hotWriteInfos[i - 1]).length;
-const distinctChanges = hotWriteInfos.reduce((set, x) => set.add(x), new Set()).size;
+/** 带新内容的热度写（= 每一次写都真的变了、没有一次是重复放旧快照）。 */
+const contentSteps = hotWriteInfos.filter((x, i) => i === 0 || x !== hotWriteInfos[i - 1]).length;
+const distinctSnapshots = hotWriteInfos.reduce((set, x) => set.add(x), new Set()).size;
 const yieldCount = traced.filter((l) => /hot push yielded on input/.test(l)).length;
 const completeCount = traced.filter((l) => /ops consumed: complete/.test(l)).length;
 
@@ -238,11 +300,11 @@ run('6) 让路的写次数 ≤ 待写变化数（写次数不由 complete 次数
   assert.equal(duplicateWrites, 0,
     `${duplicateWrites} 次写带走了与上一次落盘**相同**的热度内容 ⇒ 让路把写次数和事件数绑了，`
     + `而不是和变化数绑（这正是「每轮多一次写」那个担心的形态）`);
-  assert.ok(hotWriteInfos.length <= distinctChanges,
-    `含 _hot 的写 ${hotWriteInfos.length} 次 > 热度内容变化 ${distinctChanges} 次 ⇒ 有写没有信息量`);
-  assert.ok(yieldCount <= distinctChanges,
-    `让路打字 ${yieldCount} 次 > 变化数 ${distinctChanges} ⇒ 让路在重复放同一份快照`);
-  realLog(`  ℹ 写次数=${hotWriteInfos.length} · 热度内容变化数=${distinctChanges} · `
+  assert.ok(hotWriteInfos.length <= contentSteps,
+    `含 _hot 的写 ${hotWriteInfos.length} 次 > 带新内容的写 ${contentSteps} 次 ⇒ 有写没有信息量`);
+  assert.ok(yieldCount <= hotWriteInfos.length,
+    `让路打字 ${yieldCount} 次 > 带 _hot 的写 ${hotWriteInfos.length} 次 ⇒ 让路在放同一份快照`);
+  realLog(`  ℹ 写次数=${hotWriteInfos.length} · 带新内容的写=${contentSteps}（不同快照 ${distinctSnapshots} 份） · `
     + `complete 次数=${completeCount} · 让路次数=${yieldCount}（写次数由变化数封顶，不由 complete 封顶）`);
 });
 

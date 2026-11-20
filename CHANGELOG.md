@@ -6,6 +6,30 @@ All notable changes to this project will be documented in this file.
 
 ### 修复
 
+- **热度管理里「删除」点了没反应，再点一次更是彻底无效**（#179）。设置卡的「热门短语表」每一行
+  都有「固定 / 删除」，但删完之后界面**一动不动**：`consumeOps` 把 op 交给
+  `persistence.applyOps`（宿主内存与盘上的 `suggest_ghost_hotness.json` 都真的删了）、
+  随后 `flush` 收工——**没有任何回推**。卡片只按 `_hot` 推送渲染（`settings-card.tsx` 的
+  `HotnessSection` 读 `hotRaw`），于是它继续显示旧的那一份；用户再点同一行的删除，那已经是
+  **no-op**（`HotnessTable.deleteEntry` 对表里没有的文本直接返回 false，`changed=0`），
+  于是「第一次点了像没生效、第二次点确定没生效」。修法：`changed > 0` 时立刻
+  `pushToClient(statePushOf(会话), { hotNow: true })` —— 带 `hotNow` 是因为用户刚按了按钮，
+  这一次刷新不该再被 1s 合并窗口压住；`changed > 0` 这道闸门则保证**重复点击不写**（no-op 没有
+  新信息，写一次只是白顶一格 revision）。
+  **回推用的会话取自 `statePushOf` 真正被调过的那个**（新增 `lastActiveSession`），不是
+  「最近产出建议的会话」：热表 op 不带会话 id，而历史环按会话物化，拿建议会话会在建议为空
+  时**省略** `history`，于是同一份热表写出两个不同字节的载荷（带环 / 不带环），下一条 `complete`
+  的回推又判成「内容变了」而多写一格（实测 add → delete → complete 三次操作写出 5 格、
+  其中两格内容逐字相同）。启动期的遗留补消费传 `hotRefresh: false`：那一刻热表可能还没恢复，
+  推出去的是不完整快照，修正留给既有的 `whenReady` 补推。
+  判据钉在 `scripts/hot-yield-smoke.mjs` 的 5 / 5b / 5c / 5d 四组：`add` 立刻回推且那一笔
+  **只带 `_hot`**（建议格一字未动就不该写）、`delete` 回推的载荷里**不再有**被删的那条、
+  **重复删除不写**、热表没再变时紧跟的 `complete` **不重写任何一格**。同组的断言 6 也换了口径：
+  上界不能再拿「不同快照数」判（面板 add → delete 会把热表带回先前状态，A→B→A 是两次真实变化
+  但只有两份不同快照），改成「每一次带 `_hot` 的写都与上一次的内容不同」，仍挡住「每键一次写」。
+  `scripts/hot-throttle-smoke.mjs`、`scripts/hot-yield-ratio.mjs` 与
+  `docs/real-session-harness.md` 里「面板 op 不产生推送」那句已按本条更正（它们当时是对的）。
+
 - **长建议在输入框右侧折成窄栏：折行后的续行不再跟着「行尾那一列」走**
   （[GitHub #9](https://github.com/dsh-plugin-collection/dsh-suggest-ghost/issues/9)，PR
   [#10](https://github.com/dsh-plugin-collection/dsh-suggest-ghost/pull/10)）。
